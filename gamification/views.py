@@ -1,0 +1,285 @@
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.decorators import login_required
+from django.contrib import messages
+from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
+from django.db.models import Count, Sum
+from django.http import JsonResponse
+
+from .models import (
+    Badge, UserBadge, Achievement, UserAchievement,
+    Challenge, UserChallenge, PointsTransaction, Streak, Point
+)
+from accounts.models import CustomUser
+
+
+@login_required
+def achievements_view(request):
+    """
+    Display user's achievements and badges.
+    """
+    user = request.user
+    
+    # Get user's achievements
+    user_achievements = UserAchievement.objects.filter(user=user).select_related('achievement')
+    
+    # Get user's badges
+    user_badges = UserBadge.objects.filter(user=user).select_related('badge')
+    
+    # Get all available achievements
+    all_achievements = Achievement.objects.all()
+    
+    # Calculate progress for each achievement
+    for achievement in all_achievements:
+        if any(ua.achievement.id == achievement.id for ua in user_achievements):
+            achievement.unlocked = True
+            achievement.progress = 100
+        else:
+            achievement.unlocked = False
+            
+            # Calculate progress based on achievement type
+            if achievement.achievement_type == 'points':
+                achievement.progress = min(100, int((user.points / achievement.threshold) * 100))
+            elif achievement.achievement_type == 'course_completion':
+                from courses.models import Enrollment
+                completed_courses = Enrollment.objects.filter(
+                    student=user,
+                    status='completed'
+                ).count()
+                achievement.progress = min(100, int((completed_courses / achievement.threshold) * 100))
+            elif achievement.achievement_type == 'streak':
+                streak = getattr(user, 'streak', None)
+                if streak:
+                    achievement.progress = min(100, int((streak.current_streak / achievement.threshold) * 100))
+                else:
+                    achievement.progress = 0
+            else:
+                achievement.progress = 0
+    
+    context = {
+        'user_achievements': user_achievements,
+        'user_badges': user_badges,
+        'all_achievements': all_achievements,
+    }
+    
+    return render(request, 'gamification/achievements.html', context)
+
+
+@login_required
+def badges_view(request):
+    """
+    Display user's badges and available badges.
+    """
+    user = request.user
+    
+    # Get user's badges
+    user_badges = UserBadge.objects.filter(user=user).select_related('badge')
+    
+    # Get all available badges
+    all_badges = Badge.objects.all()
+    
+    # Mark badges as earned or not
+    for badge in all_badges:
+        badge.earned = any(ub.badge.id == badge.id for ub in user_badges)
+    
+    context = {
+        'user_badges': user_badges,
+        'all_badges': all_badges,
+    }
+    
+    return render(request, 'gamification/badges.html', context)
+
+
+@login_required
+def challenges_view(request):
+    """
+    Display active challenges and user's challenge progress.
+    """
+    user = request.user
+    
+    # Get active challenges
+    active_challenges = Challenge.objects.filter(
+        is_active=True,
+        start_date__lte=timezone.now(),
+        end_date__gte=timezone.now()
+    )
+    
+    # Get user's challenges
+    user_challenges = UserChallenge.objects.filter(
+        user=user
+    ).select_related('challenge')
+    
+    # Create a dictionary of challenge_id -> user_challenge
+    user_challenge_dict = {uc.challenge.id: uc for uc in user_challenges}
+    
+    # Add user progress to active challenges
+    for challenge in active_challenges:
+        if challenge.id in user_challenge_dict:
+            challenge.user_status = user_challenge_dict[challenge.id].status
+            challenge.user_progress = user_challenge_dict[challenge.id].progress
+        else:
+            challenge.user_status = None
+            challenge.user_progress = 0
+    
+    context = {
+        'active_challenges': active_challenges,
+        'user_challenges': user_challenges,
+    }
+    
+    return render(request, 'gamification/challenges.html', context)
+
+
+@login_required
+def accept_challenge(request, challenge_id):
+    """
+    Accept a challenge.
+    """
+    challenge = get_object_or_404(Challenge, id=challenge_id, is_active=True)
+    
+    # Check if challenge is still active
+    if not challenge.is_ongoing:
+        messages.error(request, _("This challenge is no longer active."))
+        return redirect('gamification:challenges')
+    
+    # Check if already accepted
+    if UserChallenge.objects.filter(user=request.user, challenge=challenge).exists():
+        messages.info(request, _("You have already accepted this challenge."))
+    else:
+        # Create user challenge
+        UserChallenge.objects.create(
+            user=request.user,
+            challenge=challenge,
+            status='accepted'
+        )
+        messages.success(request, _("Challenge accepted! Complete it before it expires to earn rewards."))
+    
+    return redirect('gamification:challenges')
+
+
+@login_required
+def points_history(request):
+    """
+    Display user's points transaction history.
+    """
+    user = request.user
+    
+    # Get points transactions
+    transactions = PointsTransaction.objects.filter(user=user).order_by('-timestamp')
+    
+    # Calculate points by category
+    points_by_category = {}
+    for transaction in transactions:
+        category = transaction.transaction_type
+        points = transaction.points
+        
+        if category not in points_by_category:
+            points_by_category[category] = 0
+        
+        if category in ['earned', 'bonus']:
+            points_by_category[category] += points
+        elif category in ['spent', 'penalty']:
+            points_by_category[category] -= points
+    
+    context = {
+        'transactions': transactions,
+        'points_by_category': points_by_category,
+    }
+    
+    return render(request, 'gamification/points_history.html', context)
+
+
+@login_required
+def leaderboard(request):
+    """
+    Display the leaderboard of users ranked by points.
+    """
+    # Changed from total_points to points_sum to avoid conflict with the property
+    top_users = CustomUser.objects.filter(is_student=True).annotate(
+        points_sum=Sum('points_earned__points')
+    ).order_by('-points_sum')[:20]  # Top 20 users
+    
+    # Get current user's rank
+    if request.user.is_authenticated:
+        # Calculate points directly instead of using the property
+        user_points_sum = Point.objects.filter(user=request.user).aggregate(Sum('points'))['points__sum'] or 0
+        user_rank = CustomUser.objects.filter(
+            is_student=True
+        ).annotate(
+            points_sum=Sum('points_earned__points')
+        ).filter(
+            points_sum__gt=user_points_sum
+        ).count() + 1
+    else:
+        user_rank = None
+    
+    # Get users with most badges
+    badge_leaders = CustomUser.objects.filter(is_student=True).annotate(
+        badge_count=Count('badges')
+    ).order_by('-badge_count')[:10]  # Top 10 users with most badges
+    
+    # Get users with longest streaks
+    streak_leaders = Streak.objects.order_by('-current_streak')[:10]
+    
+    context = {
+        'top_users': top_users,
+        'user_rank': user_rank,
+        'badge_leaders': badge_leaders,
+        'streak_leaders': streak_leaders,
+    }
+    
+    return render(request, 'gamification/leaderboard.html', context)
+
+
+@login_required
+def update_streak(request):
+    """
+    AJAX endpoint to update user's streak.
+    """
+    if request.method == 'POST':
+        user = request.user
+        
+        # Get or create streak
+        streak, created = Streak.objects.get_or_create(user=user)
+        
+        # Update streak
+        streak.update_streak()
+        
+        return JsonResponse({
+            'success': True,
+            'current_streak': streak.current_streak,
+            'longest_streak': streak.longest_streak,
+        })
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def achievements(request):
+    """
+    Display all available achievements and the user's progress.
+    """
+    all_achievements = Achievement.objects.all()
+    user_achievements = request.user.achievement_set.all()
+    
+    context = {
+        'all_achievements': all_achievements,
+        'user_achievements': user_achievements,
+    }
+    
+    return render(request, 'gamification/achievements.html', context)
+
+
+@login_required
+def badges(request):
+    """
+    Display all available badges and the user's earned badges.
+    """
+    all_badges = Badge.objects.all()
+    user_badges = request.user.badge_set.all()
+    
+    context = {
+        'all_badges': all_badges,
+        'user_badges': user_badges,
+    }
+    
+    return render(request, 'gamification/badges.html', context) 

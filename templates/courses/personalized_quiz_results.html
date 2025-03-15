@@ -1,0 +1,148 @@
+{% extends 'base.html' %}
+
+{% block title %}Quiz Results - EduMate{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h1 class="mb-3">Quiz Results</h1>
+            <p class="lead">{{ attempt.title }}</p>
+        </div>
+        <div class="col-md-4 text-end">
+            <a href="{% url 'courses:generate_personalized_quiz' %}" class="btn btn-primary">
+                <i class="fas fa-sync-alt me-2"></i> Try Another Challenge
+            </a>
+        </div>
+    </div>
+    
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header {% if attempt.score >= 80 %}bg-success text-white{% elif attempt.score >= 60 %}bg-warning{% else %}bg-danger text-white{% endif %}">
+                    <h5 class="card-title mb-0">Your Score</h5>
+                </div>
+                <div class="card-body text-center">
+                    <div class="display-1 mb-3 {% if attempt.score >= 80 %}text-success{% elif attempt.score >= 60 %}text-warning{% else %}text-danger{% endif %}">
+                        {{ attempt.score|floatformat:0 }}%
+                    </div>
+                    <p class="lead">{{ attempt.correct_answers }} out of {{ attempt.total_questions }} correct</p>
+                    
+                    <div class="progress mt-3" style="height: 20px;">
+                        <div class="progress-bar {% if attempt.score >= 80 %}bg-success{% elif attempt.score >= 60 %}bg-warning{% else %}bg-danger{% endif %}" 
+                             role="progressbar" 
+                             style="width: {{ attempt.score }}%;" 
+                             aria-valuenow="{{ attempt.score }}" 
+                             aria-valuemin="0" 
+                             aria-valuemax="100">
+                            {{ attempt.score|floatformat:0 }}%
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer text-center">
+                    <small class="text-muted">Completed on {{ attempt.created_at|date:"F j, Y, g:i a" }}</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-info text-white">
+                    <h5 class="card-title mb-0">AI Feedback</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex align-items-center mb-4">
+                        <div class="me-3">
+                            <i class="fas fa-robot fa-3x text-info"></i>
+                        </div>
+                        <div>
+                            <h5 class="mb-1">Learning Assistant</h5>
+                            <p class="text-muted mb-0">Personalized feedback based on your performance</p>
+                        </div>
+                    </div>
+                    
+                    <div class="alert {% if attempt.score >= 80 %}alert-success{% elif attempt.score >= 60 %}alert-warning{% else %}alert-danger{% endif %}">
+                        <p class="mb-0">{{ feedback }}</p>
+                    </div>
+                    
+                    {% if attempt.score < 80 %}
+                    <div class="mt-4">
+                        <h6>Improvement Suggestions:</h6>
+                        <ul>
+                            {% if attempt.score < 60 %}
+                            <li>Review the fundamental concepts in these topics</li>
+                            <li>Try practicing with more basic exercises first</li>
+                            <li>Consider scheduling a tutoring session</li>
+                            {% else %}
+                            <li>Focus on the specific areas where you made mistakes</li>
+                            <li>Try more practice exercises to reinforce your understanding</li>
+                            {% endif %}
+                            <li>Take another personalized quiz after studying to measure improvement</li>
+                        </ul>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="card-footer">
+                    <div class="d-grid">
+                        <a href="{% url 'analytics:student_dashboard' %}" class="btn btn-outline-info">
+                            <i class="fas fa-chart-line me-2"></i> View Your Learning Analytics
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="card-title mb-0">Next Steps</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body text-center">
+                                    <i class="fas fa-book fa-3x text-primary mb-3"></i>
+                                    <h5 class="card-title">Continue Learning</h5>
+                                    <p class="card-text">Return to your courses and continue your learning journey.</p>
+                                    <a href="{% url 'courses:course_list' %}" class="btn btn-outline-primary">
+                                        My Courses
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body text-center">
+                                    <i class="fas fa-sync-alt fa-3x text-success mb-3"></i>
+                                    <h5 class="card-title">Try Another Challenge</h5>
+                                    <p class="card-text">Generate a new personalized quiz to test different skills.</p>
+                                    <a href="{% url 'courses:generate_personalized_quiz' %}" class="btn btn-outline-success">
+                                        New Challenge
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body text-center">
+                                    <i class="fas fa-trophy fa-3x text-warning mb-3"></i>
+                                    <h5 class="card-title">Check Achievements</h5>
+                                    <p class="card-text">See what achievements you've unlocked through your learning.</p>
+                                    <a href="{% url 'gamification:achievements' %}" class="btn btn-outline-warning">
+                                        My Achievements
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 
