@@ -2,7 +2,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils.translation import gettext_lazy as _
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, login, authenticate
 from django.urls import reverse_lazy, reverse
 from django.views.generic import UpdateView, DetailView, ListView
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -12,7 +12,10 @@ from django.db.models import Count, Sum
 from .models import UserProfile
 from courses.models import Course, Enrollment
 from analytics.models import UserActivity
-from .forms import CustomUserChangeForm, UserProfileForm, UserRegistrationForm, UserUpdateForm, ProfileUpdateForm
+from .forms import (
+    CustomUserChangeForm, UserProfileForm, UserRegistrationForm, 
+    UserUpdateForm, ProfileUpdateForm, SignUpForm, ProfileForm
+)
 from gamification.models import UserAchievement, UserBadge
 
 User = get_user_model()
@@ -117,50 +120,55 @@ class LeaderboardView(ListView):
         return User.objects.filter(is_active=True).order_by('-points')[:50]
 
 
+def signup(request):
+    """
+    View for user registration
+    """
+    if request.method == 'POST':
+        form = SignUpForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            # Log the user in after signup
+            raw_password = form.cleaned_data.get('password1')
+            user = authenticate(username=user.username, password=raw_password)
+            login(request, user)
+            messages.success(request, "Your account has been created successfully!")
+            return redirect('home')
+    else:
+        form = SignUpForm()
+    
+    return render(request, 'accounts/signup.html', {'form': form})
+
+
 @login_required
 def profile(request):
     """
-    Display user profile information.
+    View for displaying user profile
     """
-    user = request.user
-    
-    # Get user profile
-    try:
-        profile = user.profile
-    except:
-        # Create profile if it doesn't exist
-        from .models import UserProfile
-        profile = UserProfile.objects.create(user=user)
-    
-    context = {
-        'user': user,
-        'profile': profile,
-    }
-    
-    return render(request, 'accounts/profile.html', context)
+    return render(request, 'accounts/profile.html')
 
 
 @login_required
 def edit_profile(request):
     """
-    Edit user profile information.
+    View for editing user profile
     """
     if request.method == 'POST':
-        user_form = UserUpdateForm(request.POST, request.FILES, instance=request.user)
-        profile_form = ProfileUpdateForm(request.POST, instance=request.user.profile)
+        user_form = UserUpdateForm(request.POST, instance=request.user)
+        profile_form = ProfileForm(request.POST, request.FILES, instance=request.user.profile)
         
         if user_form.is_valid() and profile_form.is_valid():
             user_form.save()
             profile_form.save()
-            messages.success(request, 'Your profile has been updated successfully!')
+            messages.success(request, "Your profile has been updated successfully!")
             return redirect('accounts:profile')
     else:
         user_form = UserUpdateForm(instance=request.user)
-        profile_form = ProfileUpdateForm(instance=request.user.profile)
+        profile_form = ProfileForm(instance=request.user.profile)
     
     context = {
         'user_form': user_form,
-        'profile_form': profile_form,
+        'profile_form': profile_form
     }
     
     return render(request, 'accounts/edit_profile.html', context)

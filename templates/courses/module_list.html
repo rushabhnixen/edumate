@@ -8,8 +8,8 @@
         <div class="col-lg-8">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="{% url 'courses:list' %}">Courses</a></li>
-                    <li class="breadcrumb-item"><a href="{% url 'courses:detail' course.slug %}">{{ course.title }}</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'courses:course_list' %}">Courses</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'courses:course_detail' course.slug %}">{{ course.title }}</a></li>
                     <li class="breadcrumb-item active" aria-current="page">Modules</li>
                 </ol>
             </nav>
@@ -24,6 +24,9 @@
                                 <h5 class="mb-1">{{ module.title }}</h5>
                                 <small>
                                     {% if user.is_authenticated and user == course.instructor %}
+                                        <a href="{% url 'courses:module_content_list' module.id %}" class="btn btn-sm btn-outline-primary me-2">
+                                            <i class="fas fa-list"></i> Manage Content
+                                        </a>
                                         <a href="#" class="btn btn-sm btn-outline-primary">
                                             <i class="fas fa-edit"></i> Edit
                                         </a>

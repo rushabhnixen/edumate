@@ -3,21 +3,29 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.views.generic import ListView, DetailView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy, reverse
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404
 from django.utils import timezone
 from django.contrib import messages
-from django.db.models import Q, Count, Avg
+from django.db.models import Q, Count, Avg, Sum
 from django.utils.translation import gettext as _
 from django.utils.text import slugify
 from django.contrib.contenttypes.models import ContentType
+from django.core.paginator import Paginator
+import json
+from datetime import datetime, timedelta
+import random
+from django.forms import inlineformset_factory
 
 from .models import (
     Category, Course, Module, Lesson, Video, Quiz,
     Question, Option, Answer, Enrollment, Progress, QuizAttempt,
-    PersonalizedQuizAttempt
+    PersonalizedQuizAttempt, Content, StudyPreference, StudySession, Deadline, FocusArea, StudyStreak, StudyGoal, QuizAnswer
 )
-from gamification.models import Point, Achievement, UserAchievement
-from .forms import CourseForm, ModuleForm, LessonForm, QuizForm, QuestionForm
+from gamification.models import Point, Achievement, UserAchievement, UserBadge
+from .forms import (
+    CourseForm, ModuleForm, ModuleFormSet, ContentForm, 
+    QuizForm, QuestionForm, QuestionFormSet, AnswerForm, AnswerFormSet
+)
 from accounts.models import CustomUser, UserActivity
 
 
@@ -86,9 +94,9 @@ class CourseDetailView(DetailView):
         
         # Get course modules and their content counts
         modules = course.modules.all().annotate(
-            lesson_count=Count('contents', filter=Q(contents__lesson__isnull=False)),
-            video_count=Count('contents', filter=Q(contents__video__isnull=False)),
-            quiz_count=Count('contents', filter=Q(contents__quiz__isnull=False))
+            lesson_count=Count('lessons'),
+            video_count=Count('videos'),
+            quiz_count=Count('quizzes')
         )
         context['modules'] = modules
         
@@ -107,12 +115,12 @@ def enroll_course(request, slug):
     # Check if user is already enrolled
     if Enrollment.objects.filter(student=request.user, course=course).exists():
         messages.info(request, f"You are already enrolled in {course.title}")
-        return redirect('courses:detail', slug=slug)
+        return redirect('courses:course_detail', slug=slug)
     
     # Check if user is the instructor
     if request.user == course.instructor:
         messages.warning(request, "You cannot enroll in your own course")
-        return redirect('courses:detail', slug=slug)
+        return redirect('courses:course_detail', slug=slug)
     
     # Create enrollment
     enrollment = Enrollment.objects.create(
@@ -149,32 +157,46 @@ def enroll_course(request, slug):
             pass  # Achievement doesn't exist yet
     
     messages.success(request, f"You have successfully enrolled in {course.title}! You earned 10 points.")
-    return redirect('courses:module_list', slug=slug)
+    return redirect('courses:course_detail', slug=slug)
 
 
 @login_required
 def my_courses(request):
     """
-    Display courses the user is enrolled in.
+    View for the my courses page.
     """
-    enrollments = Enrollment.objects.filter(student=request.user).select_related('course')
+    user = request.user
     
-    # Calculate progress for each course
-    for enrollment in enrollments:
-        course = enrollment.course
-        progress_records = Progress.objects.filter(
-            student=request.user,
-            course=course
-        )
+    # Get user's enrolled courses
+    enrolled_courses = Course.objects.filter(students=user).order_by('-updated_at')
+    
+    # Get course progress for each course
+    courses_with_progress = []
+    for course in enrolled_courses:
+        # Calculate progress based on completed content items
+        # In a real implementation, this would be stored in a separate model
+        # For now, we'll use a random value for demonstration
+        progress = getattr(course, 'progress', random.randint(0, 100))
         
-        if progress_records.exists():
-            total_percentage = sum(p.completion_percentage for p in progress_records)
-            enrollment.overall_progress = total_percentage / progress_records.count()
-        else:
-            enrollment.overall_progress = 0
+        # Get last accessed time
+        last_accessed = course.updated_at
+        
+        courses_with_progress.append({
+            'course': course,
+            'progress': progress,
+            'last_accessed': last_accessed,
+        })
     
+    # Sort courses by last accessed time (most recent first)
+    courses_with_progress = sorted(
+        courses_with_progress,
+        key=lambda x: x['last_accessed'],
+        reverse=True
+    )
+    
+    # Prepare context
     context = {
-        'enrollments': enrollments
+        'courses': courses_with_progress,
     }
     
     return render(request, 'courses/my_courses.html', context)
@@ -654,12 +676,25 @@ class CourseCreateView(LoginRequiredMixin, UserPassesTestMixin, CreateView):
     
     def form_valid(self, form):
         form.instance.instructor = self.request.user
-        form.instance.slug = slugify(form.instance.title)
+        
+        # Generate a base slug from the title
+        base_slug = slugify(form.instance.title)
+        
+        # Check if the slug already exists
+        slug = base_slug
+        counter = 1
+        
+        while Course.objects.filter(slug=slug).exists():
+            # If slug exists, append a number to make it unique
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+        
+        form.instance.slug = slug
         messages.success(self.request, f'Course "{form.instance.title}" has been created!')
         return super().form_valid(form)
     
     def get_success_url(self):
-        return reverse('courses:detail', kwargs={'slug': self.object.slug})
+        return reverse('courses:course_detail', kwargs={'slug': self.object.slug})
 
 
 class ModuleListView(LoginRequiredMixin, ListView):
@@ -783,110 +818,1150 @@ def complete_module(request, course_slug, module_id):
 
 
 @login_required
-def take_quiz(request, course_slug, quiz_id):
-    course = get_object_or_404(Course, slug=course_slug)
+def take_quiz(request, quiz_id):
+    """
+    View for taking a quiz.
+    """
     quiz = get_object_or_404(Quiz, id=quiz_id)
+    user = request.user
     
-    # Check if user is enrolled
-    if not Enrollment.objects.filter(student=request.user, course=course).exists():
-        messages.warning(request, "You must be enrolled in this course to take the quiz")
-        return redirect('courses:detail', slug=course_slug)
+    # Check if the user is enrolled in the course
+    if user not in quiz.module.course.students.all():
+        return redirect('course_detail', slug=quiz.module.course.slug)
     
-    # Check if quiz belongs to the course
-    if quiz.module.course != course:
-        messages.error(request, "Invalid quiz for this course")
-        return redirect('courses:detail', slug=course_slug)
+    # Check if the user has already started this quiz
+    active_attempt = QuizAttempt.objects.filter(
+        user=user,
+        quiz=quiz,
+        completed=False
+    ).first()
     
-    # Record user activity
-    UserActivity.objects.create(
-        user=request.user,
-        activity_type='quiz_attempt',
-        content_object=quiz
-    )
+    if not active_attempt:
+        # Create a new quiz attempt
+        active_attempt = QuizAttempt.objects.create(
+            user=user,
+            quiz=quiz,
+            max_score=quiz.total_points
+        )
+    
+    # Get all questions for this quiz
+    questions = Question.objects.filter(quiz=quiz)
     
     if request.method == 'POST':
         # Process quiz submission
-        score = 0
-        max_score = 0
-        
-        for question in quiz.questions.all():
-            max_score += question.points
+        for question in questions:
+            answer_id = request.POST.get(f'question_{question.id}')
             
-            # Get user's answer
-            if question.question_type == 'multiple_choice':
-                answer_id = request.POST.get(f'question_{question.id}')
-                if answer_id:
-                    selected_option = get_object_or_404(Option, id=answer_id)
-                    if selected_option.is_correct:
-                        score += question.points
-            elif question.question_type == 'true_false':
-                answer = request.POST.get(f'question_{question.id}')
-                correct_answer = question.options.filter(is_correct=True).first()
-                if answer and correct_answer and answer == str(correct_answer.id):
-                    score += question.points
-            elif question.question_type == 'short_answer':
-                # For short answer, we'll need a more sophisticated checking mechanism
-                # This is a simplified version
-                user_answer = request.POST.get(f'question_{question.id}', '').strip().lower()
-                correct_option = question.options.filter(is_correct=True).first()
-                if correct_option and user_answer == correct_option.text.strip().lower():
-                    score += question.points
+            if answer_id:
+                answer = Answer.objects.get(id=answer_id)
+                
+                # Check if the user has already answered this question
+                quiz_answer = QuizAnswer.objects.filter(
+                    quiz_attempt=active_attempt,
+                    question=question
+                ).first()
+                
+                if quiz_answer:
+                    # Update existing answer
+                    quiz_answer.answer = answer
+                    quiz_answer.is_correct = answer.is_correct
+                    quiz_answer.save()
+                else:
+                    # Create new answer
+                    QuizAnswer.objects.create(
+                        quiz_attempt=active_attempt,
+                        question=question,
+                        answer=answer,
+                        is_correct=answer.is_correct
+                    )
         
-        # Calculate percentage score
-        percentage_score = (score / max_score * 100) if max_score > 0 else 0
-        passed = percentage_score >= quiz.passing_score
-        
-        # Create quiz attempt record
-        attempt = QuizAttempt.objects.create(
-            student=request.user,
-            quiz=quiz,
-            score=score,
-            max_score=max_score,
-            passed=passed,
-            completed_at=timezone.now()
-        )
-        
-        # If passed, update progress
-        if passed:
-            progress, created = Progress.objects.get_or_create(
-                student=request.user,
-                course=course,
-                module=quiz.module
-            )
-            progress.completed_quizzes.add(quiz)
-            
-            # Award points for passing quiz
-            Point.objects.create(
-                user=request.user,
-                points=20,  # Adjust point value as needed
-                description=f"Passed quiz: {quiz.title}"
-            )
-            
-            # Check for achievements
-            quizzes_passed = QuizAttempt.objects.filter(
-                student=request.user,
-                passed=True
+        # Check if the user wants to submit the quiz
+        if 'submit_quiz' in request.POST:
+            # Calculate score
+            correct_answers = QuizAnswer.objects.filter(
+                quiz_attempt=active_attempt,
+                is_correct=True
             ).count()
             
-            # Example: Award achievement for passing first quiz
-            if quizzes_passed == 1:
-                try:
-                    achievement = Achievement.objects.get(name="First Quiz Passed")
-                    UserAchievement.objects.get_or_create(
-                        user=request.user,
-                        achievement=achievement
-                    )
-                except Achievement.DoesNotExist:
-                    pass  # Achievement doesn't exist yet
-        
-        return redirect('courses:quiz_results', course_slug=course_slug, quiz_id=quiz_id)
+            total_questions = questions.count()
+            score_percentage = (correct_answers / total_questions) * 100 if total_questions > 0 else 0
+            
+            # Update quiz attempt
+            active_attempt.score = correct_answers * (quiz.total_points / total_questions) if total_questions > 0 else 0
+            active_attempt.completed = True
+            active_attempt.completed_at = datetime.now()
+            active_attempt.passed = score_percentage >= quiz.passing_score
+            active_attempt.save()
+            
+            return redirect('quiz_results', attempt_id=active_attempt.id)
     
-    # Display quiz
+    # Get user's answers for this attempt
+    user_answers = {}
+    for answer in QuizAnswer.objects.filter(quiz_attempt=active_attempt):
+        user_answers[answer.question.id] = answer.answer.id if answer.answer else None
+    
+    # Prepare context
     context = {
-        'course': course,
         'quiz': quiz,
-        'questions': quiz.questions.all().order_by('order'),
-        'time_limit_seconds': quiz.time_limit * 60,
+        'questions': questions,
+        'user_answers': user_answers,
+        'attempt': active_attempt,
     }
     
-    return render(request, 'courses/take_quiz.html', context) 
+    return render(request, 'courses/content_types/quiz_take.html', context)
+
+
+@login_required
+def add_study_session(request):
+    """
+    View to add a new study session.
+    """
+    if request.method == 'POST':
+        user = request.user
+        title = request.POST.get('title')
+        date_str = request.POST.get('date')
+        start_time_str = request.POST.get('start_time')
+        duration = request.POST.get('duration')
+        priority = request.POST.get('priority')
+        notes = request.POST.get('notes', '')
+        course_id = request.POST.get('course')
+        
+        try:
+            # Parse date and time
+            date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            start_time = datetime.strptime(start_time_str, '%H:%M').time()
+            
+            # Get course if provided
+            course = None
+            if course_id:
+                course = Course.objects.get(id=course_id)
+            
+            # Create study session
+            session = StudySession.objects.create(
+                user=user,
+                title=title,
+                date=date,
+                start_time=start_time,
+                duration=int(duration),
+                priority=priority,
+                notes=notes,
+                course=course
+            )
+            
+            return JsonResponse({'success': True, 'session_id': session.id})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def update_study_session(request, session_id):
+    """
+    View to update an existing study session.
+    """
+    if request.method == 'POST':
+        try:
+            session = StudySession.objects.get(id=session_id, user=request.user)
+            
+            # Update fields if provided
+            if 'title' in request.POST:
+                session.title = request.POST.get('title')
+            if 'date' in request.POST:
+                session.date = datetime.strptime(request.POST.get('date'), '%Y-%m-%d').date()
+            if 'start_time' in request.POST:
+                session.start_time = datetime.strptime(request.POST.get('start_time'), '%H:%M').time()
+            if 'duration' in request.POST:
+                session.duration = int(request.POST.get('duration'))
+            if 'priority' in request.POST:
+                session.priority = request.POST.get('priority')
+            if 'notes' in request.POST:
+                session.notes = request.POST.get('notes')
+            if 'completed' in request.POST:
+                session.completed = request.POST.get('completed') == 'true'
+            if 'course' in request.POST and request.POST.get('course'):
+                session.course = Course.objects.get(id=request.POST.get('course'))
+            
+            session.save()
+            
+            # Update streak if session is completed
+            if session.completed:
+                streak, created = StudyStreak.objects.get_or_create(user=request.user)
+                streak.update_streak(session.date)
+            
+            return JsonResponse({'success': True})
+        except StudySession.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Session not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def delete_study_session(request, session_id):
+    """
+    View to delete a study session.
+    """
+    if request.method == 'POST':
+        try:
+            session = StudySession.objects.get(id=session_id, user=request.user)
+            session.delete()
+            return JsonResponse({'success': True})
+        except StudySession.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Session not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def update_study_preferences(request):
+    """
+    View to update study preferences.
+    """
+    if request.method == 'POST':
+        try:
+            preferences, created = StudyPreference.objects.get_or_create(user=request.user)
+            
+            # Update fields if provided
+            if 'daily_goal' in request.POST:
+                preferences.daily_goal = float(request.POST.get('daily_goal'))
+            if 'weekly_goal' in request.POST:
+                preferences.weekly_goal = float(request.POST.get('weekly_goal'))
+            if 'preferred_time' in request.POST:
+                preferences.preferred_time = request.POST.get('preferred_time')
+            if 'session_length' in request.POST:
+                preferences.session_length = request.POST.get('session_length')
+            if 'email_notifications' in request.POST:
+                preferences.email_notifications = request.POST.get('email_notifications') == 'true'
+            if 'browser_notifications' in request.POST:
+                preferences.browser_notifications = request.POST.get('browser_notifications') == 'true'
+            if 'reminder_notifications' in request.POST:
+                preferences.reminder_notifications = request.POST.get('reminder_notifications') == 'true'
+            
+            preferences.save()
+            
+            return JsonResponse({'success': True})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def add_deadline(request):
+    """
+    View to add a new deadline.
+    """
+    if request.method == 'POST':
+        user = request.user
+        title = request.POST.get('title')
+        description = request.POST.get('description', '')
+        due_date_str = request.POST.get('due_date')
+        course_id = request.POST.get('course')
+        
+        try:
+            # Parse due date
+            due_date = datetime.strptime(due_date_str, '%Y-%m-%d').date()
+            
+            # Get course if provided
+            course = None
+            if course_id:
+                course = Course.objects.get(id=course_id)
+            
+            # Create deadline
+            deadline = Deadline.objects.create(
+                user=user,
+                title=title,
+                description=description,
+                due_date=due_date,
+                course=course
+            )
+            
+            return JsonResponse({'success': True, 'deadline_id': deadline.id})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def update_deadline(request, deadline_id):
+    """
+    View to update an existing deadline.
+    """
+    if request.method == 'POST':
+        try:
+            deadline = Deadline.objects.get(id=deadline_id, user=request.user)
+            
+            # Update fields if provided
+            if 'title' in request.POST:
+                deadline.title = request.POST.get('title')
+            if 'description' in request.POST:
+                deadline.description = request.POST.get('description')
+            if 'due_date' in request.POST:
+                deadline.due_date = datetime.strptime(request.POST.get('due_date'), '%Y-%m-%d').date()
+            if 'completed' in request.POST:
+                deadline.completed = request.POST.get('completed') == 'true'
+            if 'course' in request.POST and request.POST.get('course'):
+                deadline.course = Course.objects.get(id=request.POST.get('course'))
+            
+            deadline.save()
+            
+            return JsonResponse({'success': True})
+        except Deadline.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Deadline not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def delete_deadline(request, deadline_id):
+    """
+    View to delete a deadline.
+    """
+    if request.method == 'POST':
+        try:
+            deadline = Deadline.objects.get(id=deadline_id, user=request.user)
+            deadline.delete()
+            return JsonResponse({'success': True})
+        except Deadline.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Deadline not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def add_focus_area(request):
+    """
+    View to add a new focus area.
+    """
+    if request.method == 'POST':
+        user = request.user
+        title = request.POST.get('title')
+        description = request.POST.get('description', '')
+        
+        try:
+            # Create focus area
+            focus_area = FocusArea.objects.create(
+                user=user,
+                title=title,
+                description=description
+            )
+            
+            return JsonResponse({'success': True, 'focus_area_id': focus_area.id})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def update_focus_area(request, focus_area_id):
+    """
+    View to update an existing focus area.
+    """
+    if request.method == 'POST':
+        try:
+            focus_area = FocusArea.objects.get(id=focus_area_id, user=request.user)
+            
+            # Update fields if provided
+            if 'title' in request.POST:
+                focus_area.title = request.POST.get('title')
+            if 'description' in request.POST:
+                focus_area.description = request.POST.get('description')
+            if 'progress' in request.POST:
+                focus_area.progress = int(request.POST.get('progress'))
+            if 'hours_spent' in request.POST:
+                focus_area.hours_spent = float(request.POST.get('hours_spent'))
+            
+            focus_area.save()
+            
+            return JsonResponse({'success': True})
+        except FocusArea.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Focus area not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def delete_focus_area(request, focus_area_id):
+    """
+    View to delete a focus area.
+    """
+    if request.method == 'POST':
+        try:
+            focus_area = FocusArea.objects.get(id=focus_area_id, user=request.user)
+            focus_area.delete()
+            return JsonResponse({'success': True})
+        except FocusArea.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Focus area not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def add_study_goal(request):
+    """
+    View to add a new study goal.
+    """
+    if request.method == 'POST':
+        user = request.user
+        title = request.POST.get('title')
+        description = request.POST.get('description', '')
+        target_date_str = request.POST.get('target_date', '')
+        
+        try:
+            # Parse target date if provided
+            target_date = None
+            if target_date_str:
+                target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+            
+            # Create study goal
+            goal = StudyGoal.objects.create(
+                user=user,
+                title=title,
+                description=description,
+                target_date=target_date
+            )
+            
+            return JsonResponse({'success': True, 'goal_id': goal.id})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def update_study_goal(request, goal_id):
+    """
+    View to update an existing study goal.
+    """
+    if request.method == 'POST':
+        try:
+            goal = StudyGoal.objects.get(id=goal_id, user=request.user)
+            
+            # Update fields if provided
+            if 'title' in request.POST:
+                goal.title = request.POST.get('title')
+            if 'description' in request.POST:
+                goal.description = request.POST.get('description')
+            if 'target_date' in request.POST and request.POST.get('target_date'):
+                goal.target_date = datetime.strptime(request.POST.get('target_date'), '%Y-%m-%d').date()
+            if 'progress' in request.POST:
+                goal.progress = int(request.POST.get('progress'))
+            
+            goal.save()
+            
+            return JsonResponse({'success': True})
+        except StudyGoal.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Study goal not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def delete_study_goal(request, goal_id):
+    """
+    View to delete a study goal.
+    """
+    if request.method == 'POST':
+        try:
+            goal = StudyGoal.objects.get(id=goal_id, user=request.user)
+            goal.delete()
+            return JsonResponse({'success': True})
+        except StudyGoal.DoesNotExist:
+            return JsonResponse({'success': False, 'error': 'Study goal not found'})
+        except Exception as e:
+            return JsonResponse({'success': False, 'error': str(e)})
+    
+    return JsonResponse({'success': False, 'error': 'Invalid request method'})
+
+
+@login_required
+def personalized_recommendations(request):
+    """
+    View for the personalized recommendations page.
+    """
+    user = request.user
+    
+    # Get user's enrolled courses
+    enrolled_courses = Course.objects.filter(students=user)
+    
+    # Get user's completed quizzes
+    completed_quizzes = QuizAttempt.objects.filter(
+        user=user,
+        completed=True
+    ).select_related('quiz__module__course')
+    
+    # Get user's study sessions
+    study_sessions = StudySession.objects.filter(
+        user=user,
+        completed=True
+    ).select_related('course')
+    
+    # Calculate learning statistics
+    total_courses = enrolled_courses.count()
+    completed_courses = enrolled_courses.filter(progress=100).count()
+    in_progress_courses = total_courses - completed_courses
+    
+    total_quizzes = completed_quizzes.count()
+    avg_quiz_score = completed_quizzes.aggregate(Avg('score'))['score__avg'] or 0
+    
+    total_study_hours = sum(session.duration for session in study_sessions) / 60
+    
+    # Get focus areas
+    focus_areas = FocusArea.objects.filter(user=user).order_by('-hours_spent')[:5]
+    
+    # Get study goals
+    study_goals = StudyGoal.objects.filter(user=user).order_by('target_date')
+    
+    # Identify skill gaps based on quiz performance
+    skill_gaps = []
+    low_scoring_quizzes = completed_quizzes.filter(score__lt=70)
+    
+    for quiz_attempt in low_scoring_quizzes:
+        quiz = quiz_attempt.quiz
+        course = quiz.module.course
+        
+        # Check if this skill gap is already in the list
+        if not any(gap['skill'] == quiz.title for gap in skill_gaps):
+            skill_gaps.append({
+                'skill': quiz.title,
+                'course': course.title,
+                'score': quiz_attempt.score,
+                'last_attempt': quiz_attempt.completed_at
+            })
+    
+    # Sort skill gaps by score (ascending)
+    skill_gaps = sorted(skill_gaps, key=lambda x: x['score'])[:5]
+    
+    # Get recommended courses
+    # For simplicity, we'll recommend courses that the user is not enrolled in
+    # In a real implementation, this would use more sophisticated recommendation algorithms
+    recommended_courses = Course.objects.exclude(
+        id__in=enrolled_courses.values_list('id', flat=True)
+    ).filter(
+        is_published=True
+    ).order_by('-created_at')[:6]
+    
+    # Prepare context
+    context = {
+        'learning_statistics': {
+            'total_courses': total_courses,
+            'completed_courses': completed_courses,
+            'in_progress_courses': in_progress_courses,
+            'total_quizzes': total_quizzes,
+            'avg_quiz_score': avg_quiz_score,
+            'total_study_hours': total_study_hours,
+        },
+        'skill_gaps': skill_gaps,
+        'focus_areas': focus_areas,
+        'study_goals': study_goals,
+        'recommended_courses': recommended_courses,
+    }
+    
+    return render(request, 'courses/personalized_recommendations.html', context)
+
+
+@login_required
+def learning_path(request):
+    """
+    View for the learning path page.
+    """
+    user = request.user
+    
+    # Get user's enrolled courses
+    enrolled_courses = Course.objects.filter(students=user).order_by('created_at')
+    
+    # Get user's study goals
+    study_goals = StudyGoal.objects.filter(user=user).order_by('target_date')
+    
+    # Get user's focus areas
+    focus_areas = FocusArea.objects.filter(user=user).order_by('-hours_spent')
+    
+    # Calculate overall progress
+    total_courses = enrolled_courses.count()
+    completed_courses = enrolled_courses.filter(progress=100).count()
+    overall_progress = (completed_courses / total_courses * 100) if total_courses > 0 else 0
+    
+    # Estimate completion date based on current progress and study rate
+    # For simplicity, we'll use a fixed rate of 1 course per month
+    remaining_courses = total_courses - completed_courses
+    months_to_complete = remaining_courses
+    estimated_completion_date = datetime.now() + timedelta(days=30 * months_to_complete)
+    
+    # Organize courses into learning path modules
+    # For simplicity, we'll group courses by category or create artificial groupings
+    learning_modules = []
+    
+    # Group courses by category
+    course_categories = {}
+    for course in enrolled_courses:
+        category = course.category if hasattr(course, 'category') and course.category else "General"
+        if category not in course_categories:
+            course_categories[category] = []
+        course_categories[category].append(course)
+    
+    # Create learning modules from categories
+    for category, courses in course_categories.items():
+        # Calculate module progress
+        total_module_courses = len(courses)
+        completed_module_courses = len([c for c in courses if getattr(c, 'progress', 0) == 100])
+        module_progress = (completed_module_courses / total_module_courses * 100) if total_module_courses > 0 else 0
+        
+        learning_modules.append({
+            'title': f"{category} Skills",
+            'description': f"Master the fundamentals of {category}",
+            'completed': module_progress == 100,
+            'progress': module_progress,
+            'courses': courses,
+        })
+    
+    # If no categories exist, create a default module
+    if not learning_modules:
+        total_module_courses = enrolled_courses.count()
+        completed_module_courses = enrolled_courses.filter(progress=100).count()
+        module_progress = (completed_module_courses / total_module_courses * 100) if total_module_courses > 0 else 0
+        
+        learning_modules.append({
+            'title': "Your Learning Path",
+            'description': "Complete these courses to achieve your learning goals",
+            'completed': module_progress == 100,
+            'progress': module_progress,
+            'courses': enrolled_courses,
+        })
+    
+    # Calculate milestones completed
+    milestones_completed = completed_courses
+    
+    # Prepare context
+    context = {
+        'learning_goals': study_goals,
+        'skills_progress': focus_areas,
+        'path_overview': {
+            'estimated_completion': estimated_completion_date.strftime('%B %d, %Y'),
+            'total_courses': total_courses,
+            'certificates': completed_courses,  # Assuming one certificate per completed course
+            'total_hours': total_courses * 10,  # Assuming 10 hours per course on average
+        },
+        'learning_path': learning_modules,
+        'path_completion': {
+            'overall_progress': overall_progress,
+            'milestones_completed': milestones_completed,
+            'estimated_completion': estimated_completion_date.strftime('%B %d, %Y'),
+        },
+    }
+    
+    return render(request, 'courses/learning_path.html', context)
+
+
+@login_required
+def study_planner(request):
+    """
+    View for the study planner page.
+    """
+    user = request.user
+    
+    # Get or create study preferences
+    preferences, created = StudyPreference.objects.get_or_create(user=user)
+    
+    # Get study sessions for the calendar
+    study_sessions = StudySession.objects.filter(user=user)
+    
+    # Get today's study sessions
+    today = datetime.now().date()
+    today_sessions = study_sessions.filter(date=today).order_by('start_time')
+    
+    # Get upcoming deadlines
+    upcoming_deadlines = Deadline.objects.filter(
+        user=user, 
+        due_date__gte=today,
+        completed=False
+    ).order_by('due_date')[:5]
+    
+    # Get focus areas
+    focus_areas = FocusArea.objects.filter(user=user).order_by('-hours_spent')[:5]
+    
+    # Get or create study streak
+    streak, created = StudyStreak.objects.get_or_create(user=user)
+    
+    # Calculate study statistics
+    total_sessions = study_sessions.count()
+    completed_sessions = study_sessions.filter(completed=True).count()
+    completion_rate = (completed_sessions / total_sessions * 100) if total_sessions > 0 else 0
+    
+    # Calculate total study hours this week
+    start_of_week = today - timedelta(days=today.weekday())
+    end_of_week = start_of_week + timedelta(days=6)
+    this_week_sessions = study_sessions.filter(
+        date__gte=start_of_week,
+        date__lte=end_of_week,
+        completed=True
+    )
+    weekly_hours = sum(session.duration for session in this_week_sessions) / 60
+    weekly_goal_progress = (weekly_hours / preferences.weekly_goal * 100) if preferences.weekly_goal > 0 else 0
+    
+    # Calculate total study hours today
+    today_completed_sessions = today_sessions.filter(completed=True)
+    daily_hours = sum(session.duration for session in today_completed_sessions) / 60
+    daily_goal_progress = (daily_hours / preferences.daily_goal * 100) if preferences.daily_goal > 0 else 0
+    
+    # Prepare calendar data
+    calendar_data = []
+    for session in study_sessions:
+        calendar_data.append({
+            'id': session.id,
+            'title': session.title,
+            'start': f"{session.date.isoformat()}T{session.start_time.isoformat()}",
+            'end': f"{session.date.isoformat()}T{session.end_time.isoformat()}",
+            'className': f"priority-{session.priority} {'completed' if session.completed else ''}",
+            'extendedProps': {
+                'course': session.course.title if session.course else None,
+                'notes': session.notes,
+                'priority': session.priority,
+                'completed': session.completed,
+            }
+        })
+    
+    # Prepare context
+    context = {
+        'preferences': preferences,
+        'today_sessions': today_sessions,
+        'upcoming_deadlines': upcoming_deadlines,
+        'focus_areas': focus_areas,
+        'streak': streak,
+        'study_statistics': {
+            'total_sessions': total_sessions,
+            'completed_sessions': completed_sessions,
+            'completion_rate': completion_rate,
+            'weekly_hours': weekly_hours,
+            'weekly_goal': preferences.weekly_goal,
+            'weekly_goal_progress': weekly_goal_progress,
+            'daily_hours': daily_hours,
+            'daily_goal': preferences.daily_goal,
+            'daily_goal_progress': daily_goal_progress,
+        },
+        'calendar_data': json.dumps(calendar_data),
+    }
+    
+    return render(request, 'courses/study_planner.html', context)
+
+
+@login_required
+def view_content(request, content_id):
+    """
+    View for displaying different types of content (lesson, video, quiz).
+    """
+    # Try to find the content in different content types
+    content = None
+    content_type = None
+    
+    # Check if it's a lesson
+    try:
+        content = Lesson.objects.get(id=content_id)
+        content_type = 'lesson'
+    except Lesson.DoesNotExist:
+        pass
+    
+    # Check if it's a video
+    if not content:
+        try:
+            content = Video.objects.get(id=content_id)
+            content_type = 'video'
+        except Video.DoesNotExist:
+            pass
+    
+    # Check if it's a quiz
+    if not content:
+        try:
+            content = Quiz.objects.get(id=content_id)
+            content_type = 'quiz'
+        except Quiz.DoesNotExist:
+            pass
+    
+    # If content not found, return 404
+    if not content:
+        raise Http404("Content not found")
+    
+    # Get the course and module
+    module = content.module
+    course = module.course
+    
+    # Check if user is enrolled in the course
+    if request.user not in course.students.all():
+        return redirect('courses:course_detail', slug=course.slug)
+    
+    # Render appropriate template based on content type
+    if content_type == 'lesson':
+        return render(request, 'courses/content_types/lesson.html', {
+            'lesson': content,
+            'course': course,
+            'module': module
+        })
+    elif content_type == 'video':
+        return render(request, 'courses/content_types/video.html', {
+            'video': content,
+            'course': course,
+            'module': module
+        })
+    elif content_type == 'quiz':
+        return render(request, 'courses/content_types/quiz_intro.html', {
+            'quiz': content,
+            'course': course,
+            'module': module
+        })
+
+
+@login_required
+def instructor_dashboard(request):
+    """
+    View for the instructor dashboard.
+    """
+    # Check if user is an instructor
+    if not request.user.is_staff and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Get courses created by the instructor
+    courses = Course.objects.filter(instructor=request.user)
+    
+    # Get total number of students enrolled in all courses
+    total_students = sum(course.students.count() for course in courses)
+    
+    # Get total number of modules across all courses
+    total_modules = sum(course.modules.count() for course in courses)
+    
+    # Get total number of quizzes across all courses
+    total_quizzes = 0
+    for course in courses:
+        for module in course.modules.all():
+            total_quizzes += module.quizzes.count()
+    
+    # Get recent enrollments
+    recent_enrollments = Enrollment.objects.filter(
+        course__instructor=request.user
+    ).order_by('-enrolled_at')[:10]
+    
+    # Get recent quiz attempts
+    recent_quiz_attempts = QuizAttempt.objects.filter(
+        quiz__module__course__instructor=request.user
+    ).order_by('-completed_at')[:10]
+    
+    # Prepare context
+    context = {
+        'courses': courses,
+        'total_students': total_students,
+        'total_modules': total_modules,
+        'total_quizzes': total_quizzes,
+        'recent_enrollments': recent_enrollments,
+        'recent_quiz_attempts': recent_quiz_attempts,
+    }
+    
+    return render(request, 'courses/instructor/dashboard.html', context)
+
+
+@login_required
+def instructor_courses(request):
+    """
+    View for displaying courses created by the instructor.
+    """
+    # Check if user is an instructor
+    if not request.user.is_staff and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Get courses created by the instructor
+    courses = Course.objects.filter(instructor=request.user).order_by('-created_at')
+    
+    # Prepare context
+    context = {
+        'courses': courses,
+    }
+    
+    return render(request, 'courses/instructor/courses.html', context)
+
+
+@login_required
+def edit_course(request, course_id):
+    """
+    View for editing a course.
+    """
+    # Get the course
+    course = get_object_or_404(Course, id=course_id)
+    
+    # Check if user is the instructor of the course
+    if request.user != course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Handle form submission
+    if request.method == 'POST':
+        form = CourseForm(request.POST, request.FILES, instance=course)
+        if form.is_valid():
+            form.save()
+            return redirect('courses:instructor_courses')
+    else:
+        form = CourseForm(instance=course)
+    
+    # Prepare context
+    context = {
+        'form': form,
+        'course': course,
+    }
+    
+    return render(request, 'courses/instructor/course_form.html', context)
+
+
+@login_required
+def edit_course_modules(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    
+    # Check if user is the instructor
+    if request.user != course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    ModuleFormSet = inlineformset_factory(
+        Course,
+        Module,
+        fields=['title', 'description', 'order'],
+        extra=1,
+        can_delete=True
+    )
+    
+    if request.method == 'POST':
+        formset = ModuleFormSet(request.POST, instance=course)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, 'Modules updated successfully!')
+            return redirect('courses:course_detail', slug=course.slug)
+    else:
+        formset = ModuleFormSet(instance=course)
+    
+    return render(request, 'courses/instructor/module_formset.html', {
+        'course': course,
+        'formset': formset
+    })
+
+
+@login_required
+def delete_course(request, course_id):
+    """
+    View for deleting a course.
+    """
+    # Get the course
+    course = get_object_or_404(Course, id=course_id)
+    
+    # Check if user is the instructor of the course
+    if request.user != course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Handle form submission
+    if request.method == 'POST':
+        course.delete()
+        return redirect('courses:instructor_courses')
+    
+    # Prepare context
+    context = {
+        'course': course,
+    }
+    
+    return render(request, 'courses/instructor/course_confirm_delete.html', context)
+
+
+@login_required
+def module_content_list(request, module_id):
+    """
+    View for displaying content of a module.
+    """
+    # Get the module
+    module = get_object_or_404(Module, id=module_id)
+    
+    # Check if user is the instructor of the course
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Prepare context
+    context = {
+        'module': module,
+    }
+    
+    return render(request, 'courses/instructor/module_content_list.html', context)
+
+
+@login_required
+def add_module_content(request, module_id):
+    module = get_object_or_404(Module, id=module_id)
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        form = ContentForm(request.POST)
+        if form.is_valid():
+            content_type = form.cleaned_data['content_type']
+            
+            if content_type == 'video':
+                video = Video.objects.create(
+                    module=module,
+                    title=form.cleaned_data['title'],
+                    order=form.cleaned_data['order'],
+                    url=form.cleaned_data['video_url']
+                )
+                messages.success(request, 'Video content added successfully!')
+                return redirect('courses:module_content_list', module_id=module.id)
+                
+            elif content_type == 'lesson':
+                lesson = Lesson.objects.create(
+                    module=module,
+                    title=form.cleaned_data['title'],
+                    order=form.cleaned_data['order'],
+                    content=form.cleaned_data['text_content']
+                )
+                messages.success(request, 'Lesson content added successfully!')
+                return redirect('courses:module_content_list', module_id=module.id)
+                
+            elif content_type == 'quiz':
+                quiz = Quiz.objects.create(
+                    module=module,
+                    title=form.cleaned_data['title'],
+                    description=form.cleaned_data['description'],
+                    order=form.cleaned_data['order'],
+                    time_limit=form.cleaned_data['time_limit'],
+                    passing_score=form.cleaned_data['passing_score']
+                )
+                messages.success(request, 'Quiz created! Add questions now.')
+                return redirect('courses:add_quiz_questions', quiz_id=quiz.id)
+    else:
+        form = ContentForm()
+    
+    return render(request, 'courses/instructor/add_content.html', {
+        'form': form,
+        'module': module
+    })
+
+
+@login_required
+def create_quiz(request, content_id):
+    """
+    View for creating a quiz.
+    """
+    # Get the content
+    try:
+        content = Quiz.objects.get(id=content_id)
+    except Quiz.DoesNotExist:
+        raise Http404("Quiz not found")
+    
+    # Check if user is the instructor of the course
+    if request.user != content.module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Handle form submission
+    if request.method == 'POST':
+        form = QuizForm(request.POST, instance=content)
+        if form.is_valid():
+            form.save()
+            return redirect('courses:quiz_questions_list', quiz_id=content.id)
+    else:
+        form = QuizForm(instance=content)
+    
+    # Prepare context
+    context = {
+        'form': form,
+        'quiz': content,
+    }
+    
+    return render(request, 'courses/instructor/quiz_form.html', context)
+
+
+@login_required
+def quiz_questions_list(request, quiz_id):
+    """
+    View for displaying questions of a quiz.
+    """
+    # Get the quiz
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    
+    # Check if user is the instructor of the course
+    if request.user != quiz.module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Prepare context
+    context = {
+        'quiz': quiz,
+        'questions': quiz.questions.all().order_by('order'),
+    }
+    
+    return render(request, 'courses/instructor/quiz_questions_list.html', context)
+
+
+@login_required
+def add_quiz_questions(request, quiz_id):
+    """
+    View for adding questions to a quiz.
+    """
+    # Get the quiz
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    
+    # Check if user is the instructor of the course
+    if request.user != quiz.module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Handle form submission
+    if request.method == 'POST':
+        form = QuestionForm(request.POST)
+        if form.is_valid():
+            question = form.save(commit=False)
+            question.quiz = quiz
+            question.save()
+            return redirect('courses:add_question_answers', question_id=question.id)
+    else:
+        form = QuestionForm()
+    
+    # Prepare context
+    context = {
+        'form': form,
+        'quiz': quiz,
+    }
+    
+    return render(request, 'courses/instructor/question_form.html', context)
+
+
+@login_required
+def add_question_answers(request, question_id):
+    """
+    View for adding answers to a question.
+    """
+    # Get the question
+    question = get_object_or_404(Question, id=question_id)
+    
+    # Check if user is the instructor of the course
+    if request.user != question.quiz.module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    # Handle form submission
+    if request.method == 'POST':
+        formset = AnswerFormSet(request.POST, instance=question)
+        if formset.is_valid():
+            formset.save()
+            return redirect('courses:quiz_questions_list', quiz_id=question.quiz.id)
+    else:
+        formset = AnswerFormSet(instance=question)
+    
+    # Prepare context
+    context = {
+        'formset': formset,
+        'question': question,
+    }
+    
+    return render(request, 'courses/instructor/answer_formset.html', context) 

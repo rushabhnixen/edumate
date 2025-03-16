@@ -4,6 +4,7 @@ from django.utils.translation import gettext_lazy as _
 from django.urls import reverse
 from django.utils.text import slugify
 from django.utils import timezone
+from django.contrib.auth.models import User
 
 
 class Category(models.Model):
@@ -344,9 +345,9 @@ class Progress(models.Model):
 
 class QuizAttempt(models.Model):
     """
-    Student attempts at quizzes.
+    Model to store quiz attempts by users.
     """
-    student = models.ForeignKey(
+    user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='quiz_attempts'
@@ -356,24 +357,65 @@ class QuizAttempt(models.Model):
         on_delete=models.CASCADE,
         related_name='attempts'
     )
-    score = models.PositiveIntegerField(default=0)
-    max_score = models.PositiveIntegerField(default=0)
+    score = models.FloatField(default=0.0)
+    max_score = models.FloatField(default=0.0)
+    completed = models.BooleanField(default=False)
+    passed = models.BooleanField(default=False)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    passed = models.BooleanField(default=False)
     
     class Meta:
         verbose_name = _('Quiz Attempt')
         verbose_name_plural = _('Quiz Attempts')
+        ordering = ['-started_at']
     
     def __str__(self):
-        return f"{self.student.username} - {self.quiz.title}"
+        return f"{self.user.username}'s attempt on {self.quiz.title}"
+    
+    @property
+    def duration(self):
+        """Calculate the duration of the quiz attempt."""
+        if not self.completed_at:
+            return None
+        return (self.completed_at - self.started_at).total_seconds() / 60
     
     @property
     def score_percentage(self):
+        """Calculate the score as a percentage."""
         if self.max_score == 0:
             return 0
         return (self.score / self.max_score) * 100
+
+
+class QuizAnswer(models.Model):
+    """
+    Model to store user's answers to quiz questions.
+    """
+    quiz_attempt = models.ForeignKey(
+        QuizAttempt,
+        on_delete=models.CASCADE,
+        related_name='answers'
+    )
+    question = models.ForeignKey(
+        Question,
+        on_delete=models.CASCADE,
+        related_name='user_answers'
+    )
+    answer = models.ForeignKey(
+        Answer,
+        on_delete=models.CASCADE,
+        related_name='user_selections',
+        null=True,
+        blank=True
+    )
+    is_correct = models.BooleanField(default=False)
+    
+    class Meta:
+        verbose_name = _('Quiz Answer')
+        verbose_name_plural = _('Quiz Answers')
+    
+    def __str__(self):
+        return f"Answer to {self.question.text} by {self.quiz_attempt.user.username}"
 
 
 class PersonalizedQuizAttempt(models.Model):
@@ -416,4 +458,257 @@ class Option(models.Model):
         verbose_name_plural = _('Options')
     
     def __str__(self):
-        return f"{self.question.text[:30]}... - {self.text[:30]}..." 
+        return f"{self.question.text[:30]}... - {self.text[:30]}..."
+
+
+class StudySession(models.Model):
+    """
+    Model to store study sessions for the study planner.
+    """
+    PRIORITY_CHOICES = (
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    )
+    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='study_sessions'
+    )
+    title = models.CharField(max_length=200)
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name='study_sessions',
+        null=True,
+        blank=True
+    )
+    date = models.DateField()
+    start_time = models.TimeField()
+    duration = models.PositiveIntegerField(help_text="Duration in minutes")
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    notes = models.TextField(blank=True)
+    completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Study Session')
+        verbose_name_plural = _('Study Sessions')
+        ordering = ['date', 'start_time']
+    
+    def __str__(self):
+        return f"{self.title} - {self.date}"
+    
+    @property
+    def end_time(self):
+        """Calculate the end time based on start time and duration."""
+        from datetime import datetime, timedelta
+        start_datetime = datetime.combine(datetime.today(), self.start_time)
+        end_datetime = start_datetime + timedelta(minutes=self.duration)
+        return end_datetime.time()
+
+
+class StudyGoal(models.Model):
+    """
+    Model to store study goals for users.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='study_goals'
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    target_date = models.DateField(null=True, blank=True)
+    progress = models.PositiveIntegerField(default=0, help_text="Progress percentage (0-100)")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Study Goal')
+        verbose_name_plural = _('Study Goals')
+        ordering = ['target_date', 'created_at']
+    
+    def __str__(self):
+        return self.title
+
+
+class StudyPreference(models.Model):
+    """
+    Model to store study preferences for users.
+    """
+    TIME_PREFERENCES = (
+        ('morning', 'Morning (6 AM - 12 PM)'),
+        ('afternoon', 'Afternoon (12 PM - 5 PM)'),
+        ('evening', 'Evening (5 PM - 10 PM)'),
+        ('night', 'Night (10 PM - 6 AM)'),
+        ('flexible', 'Flexible'),
+    )
+    
+    SESSION_LENGTH_PREFERENCES = (
+        ('short', 'Short (15-30 minutes)'),
+        ('medium', 'Medium (30-60 minutes)'),
+        ('long', 'Long (60-90 minutes)'),
+        ('extended', 'Extended (90+ minutes)'),
+    )
+    
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='study_preferences'
+    )
+    daily_goal = models.FloatField(default=4.0, help_text="Daily study goal in hours")
+    weekly_goal = models.FloatField(default=20.0, help_text="Weekly study goal in hours")
+    preferred_time = models.CharField(max_length=20, choices=TIME_PREFERENCES, default='flexible')
+    session_length = models.CharField(max_length=20, choices=SESSION_LENGTH_PREFERENCES, default='medium')
+    email_notifications = models.BooleanField(default=True)
+    browser_notifications = models.BooleanField(default=True)
+    reminder_notifications = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Study Preference')
+        verbose_name_plural = _('Study Preferences')
+    
+    def __str__(self):
+        return f"{self.user.username}'s Study Preferences"
+
+
+class StudyStreak(models.Model):
+    """
+    Model to track study streaks for users.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='study_streak'
+    )
+    current_streak = models.PositiveIntegerField(default=0)
+    longest_streak = models.PositiveIntegerField(default=0)
+    last_study_date = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Study Streak')
+        verbose_name_plural = _('Study Streaks')
+    
+    def __str__(self):
+        return f"{self.user.username}'s Study Streak: {self.current_streak} days"
+    
+    def update_streak(self, study_date):
+        """Update the streak based on a new study date."""
+        from datetime import datetime, timedelta
+        
+        today = datetime.now().date()
+        
+        # Convert study_date to date object if it's a string
+        if isinstance(study_date, str):
+            study_date = datetime.strptime(study_date, '%Y-%m-%d').date()
+        
+        # If this is the first study date
+        if not self.last_study_date:
+            self.current_streak = 1
+            self.longest_streak = 1
+            self.last_study_date = study_date
+            self.save()
+            return
+        
+        # If the study date is the same as the last study date, no change
+        if study_date == self.last_study_date:
+            return
+        
+        # If the study date is before the last study date, no change
+        if study_date < self.last_study_date:
+            return
+        
+        # If the study date is one day after the last study date, increment streak
+        if study_date == self.last_study_date + timedelta(days=1):
+            self.current_streak += 1
+            if self.current_streak > self.longest_streak:
+                self.longest_streak = self.current_streak
+            self.last_study_date = study_date
+            self.save()
+            return
+        
+        # If the study date is today and the last study date was yesterday, increment streak
+        if study_date == today and self.last_study_date == today - timedelta(days=1):
+            self.current_streak += 1
+            if self.current_streak > self.longest_streak:
+                self.longest_streak = self.current_streak
+            self.last_study_date = study_date
+            self.save()
+            return
+        
+        # If there's a gap, reset the streak
+        self.current_streak = 1
+        self.last_study_date = study_date
+        self.save()
+
+
+class Deadline(models.Model):
+    """
+    Model to store deadlines for courses and assignments.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='deadlines'
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name='deadlines',
+        null=True,
+        blank=True
+    )
+    due_date = models.DateField()
+    completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Deadline')
+        verbose_name_plural = _('Deadlines')
+        ordering = ['due_date']
+    
+    def __str__(self):
+        return self.title
+    
+    @property
+    def days_left(self):
+        """Calculate the number of days left until the deadline."""
+        from datetime import datetime
+        today = datetime.now().date()
+        delta = self.due_date - today
+        return delta.days
+
+
+class FocusArea(models.Model):
+    """
+    Model to store focus areas for users.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='focus_areas'
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    progress = models.PositiveIntegerField(default=0, help_text="Progress percentage (0-100)")
+    hours_spent = models.FloatField(default=0.0, help_text="Hours spent on this focus area")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Focus Area')
+        verbose_name_plural = _('Focus Areas')
+        ordering = ['-progress']
+    
+    def __str__(self):
+        return self.title 

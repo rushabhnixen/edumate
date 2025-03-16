@@ -1,0 +1,154 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load crispy_forms_tags %}
+
+{% block title %}Manage Modules - {{ course.title }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <!-- Sidebar -->
+        <div class="col-md-3">
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Instructor Menu</h5>
+                </div>
+                <div class="list-group list-group-flush">
+                    <a href="{% url 'courses:instructor_dashboard' %}" class="list-group-item list-group-item-action">
+                        <i class="fas fa-tachometer-alt me-2"></i> Dashboard
+                    </a>
+                    <a href="{% url 'courses:instructor_courses' %}" class="list-group-item list-group-item-action">
+                        <i class="fas fa-book me-2"></i> My Courses
+                    </a>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">Course Navigation</h5>
+                </div>
+                <div class="list-group list-group-flush">
+                    <a href="{% url 'courses:course_detail' course.slug %}" class="list-group-item list-group-item-action">
+                        <i class="fas fa-arrow-left me-2"></i> Back to Course
+                    </a>
+                    <a href="{% url 'courses:edit_course' course.id %}" class="list-group-item list-group-item-action">
+                        <i class="fas fa-edit me-2"></i> Edit Course Details
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="col-md-9">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Manage Modules - {{ course.title }}</h4>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        {{ formset.management_form }}
+                        
+                        <div class="module-forms">
+                            {% for form in formset %}
+                                <div class="card mb-3 module-form">
+                                    <div class="card-body">
+                                        {% if form.instance.id %}
+                                            <h5>Edit Module</h5>
+                                        {% else %}
+                                            <h5>New Module</h5>
+                                        {% endif %}
+                                        
+                                        {% for hidden in form.hidden_fields %}
+                                            {{ hidden }}
+                                        {% endfor %}
+                                        
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                {{ form.title|as_crispy_field }}
+                                            </div>
+                                            <div class="col-md-6">
+                                                {{ form.order|as_crispy_field }}
+                                            </div>
+                                        </div>
+                                        
+                                        {{ form.description|as_crispy_field }}
+                                        
+                                        {% if form.instance.id %}
+                                            <div class="form-check mb-3">
+                                                {{ form.DELETE|as_crispy_field }}
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                    
+                                    {% if form.instance.id %}
+                                        <div class="card-footer">
+                                            <a href="{% url 'courses:module_content_list' form.instance.id %}" class="btn btn-info btn-sm">
+                                                <i class="fas fa-list me-1"></i> Manage Content
+                                            </a>
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center">
+                            <button type="button" id="add-module" class="btn btn-success">
+                                <i class="fas fa-plus-circle me-1"></i> Add Another Module
+                            </button>
+                            
+                            <div>
+                                <a href="{% url 'courses:course_detail' course.slug %}" class="btn btn-secondary me-2">Cancel</a>
+                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const addModuleBtn = document.getElementById('add-module');
+    const moduleForms = document.querySelector('.module-forms');
+    const totalFormsInput = document.getElementById('id_form-TOTAL_FORMS');
+    
+    addModuleBtn.addEventListener('click', function() {
+        const forms = moduleForms.getElementsByClassName('module-form');
+        const formCount = forms.length;
+        const lastForm = forms[formCount - 1];
+        const newForm = lastForm.cloneNode(true);
+        
+        // Update form index
+        newForm.innerHTML = newForm.innerHTML.replace(/-\d+-/g, `-${formCount}-`);
+        
+        // Clear input values
+        newForm.querySelectorAll('input[type="text"], textarea').forEach(input => {
+            input.value = '';
+        });
+        
+        // Remove DELETE checkbox if present
+        const deleteDiv = newForm.querySelector('.form-check');
+        if (deleteDiv) {
+            deleteDiv.remove();
+        }
+        
+        // Remove manage content button if present
+        const footer = newForm.querySelector('.card-footer');
+        if (footer) {
+            footer.remove();
+        }
+        
+        // Update form count
+        totalFormsInput.value = formCount + 1;
+        
+        // Add new form to the page
+        moduleForms.appendChild(newForm);
+    });
+});
+</script>
+{% endblock %} 

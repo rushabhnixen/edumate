@@ -2,7 +2,8 @@ from django.contrib import admin
 from .models import (
     Category, Course, Module, Lesson, Video, Quiz,
     Question, Answer, Option, Enrollment, Progress, QuizAttempt,
-    PersonalizedQuizAttempt
+    PersonalizedQuizAttempt, QuizAnswer,
+    StudySession, StudyGoal, StudyPreference, StudyStreak, Deadline, FocusArea
 )
 
 
@@ -92,9 +93,9 @@ class ProgressAdmin(admin.ModelAdmin):
 
 @admin.register(QuizAttempt)
 class QuizAttemptAdmin(admin.ModelAdmin):
-    list_display = ['student', 'quiz', 'score', 'max_score', 'score_percentage', 'passed', 'completed_at']
+    list_display = ['user', 'quiz', 'score', 'max_score', 'score_percentage', 'passed', 'completed_at']
     list_filter = ['passed', 'started_at', 'completed_at']
-    search_fields = ['student__username', 'quiz__title']
+    search_fields = ['user__username', 'quiz__title']
     date_hierarchy = 'started_at'
 
 
@@ -110,4 +111,12 @@ class PersonalizedQuizAttemptAdmin(admin.ModelAdmin):
 admin.site.register(Lesson)
 admin.site.register(Video)
 admin.site.register(Answer)
-admin.site.register(Option) 
+admin.site.register(Option)
+# Remove Content registration since it's an abstract model
+admin.site.register(QuizAnswer)
+admin.site.register(StudySession)
+admin.site.register(StudyGoal)
+admin.site.register(StudyPreference)
+admin.site.register(StudyStreak)
+admin.site.register(Deadline)
+admin.site.register(FocusArea) 

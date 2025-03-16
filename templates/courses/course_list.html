@@ -11,7 +11,7 @@
         </div>
         {% if user.is_instructor %}
         <div class="col-auto align-self-center">
-            <a href="{% url 'courses:create' %}" class="btn btn-primary">
+            <a href="{% url 'courses:create_course' %}" class="btn btn-primary">
                 <i class="fas fa-plus-circle"></i> Create New Course
             </a>
         </div>
@@ -88,7 +88,7 @@
                             </div>
                         </div>
                         <div class="card-footer bg-transparent">
-                            <a href="{% url 'courses:detail' course.slug %}" class="btn btn-outline-primary w-100">View Course</a>
+                            <a href="{% url 'courses:course_detail' slug=course.slug %}" class="btn btn-outline-primary w-100">View Course</a>
                         </div>
                     </div>
                 </div>
@@ -144,7 +144,7 @@
             <h4>No courses found</h4>
             <p>Try adjusting your search criteria or check back later for new courses.</p>
             {% if user.is_instructor %}
-                <a href="{% url 'courses:create' %}" class="btn btn-primary mt-2">
+                <a href="{% url 'courses:create_course' %}" class="btn btn-primary mt-2">
                     <i class="fas fa-plus-circle"></i> Create a Course
                 </a>
             {% endif %}

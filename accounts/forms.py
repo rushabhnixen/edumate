@@ -1,9 +1,12 @@
 from django import forms
 from django.contrib.auth.forms import UserCreationForm, UserChangeForm
 from django.utils.translation import gettext_lazy as _
-from allauth.account.forms import SignupForm
+from django.contrib.auth import get_user_model
 
+# Import models directly to avoid circular imports
 from .models import CustomUser, UserProfile
+
+User = get_user_model()
 
 
 class CustomUserCreationForm(UserCreationForm):
@@ -31,7 +34,7 @@ class CustomUserChangeForm(UserChangeForm):
                   'date_of_birth')
 
 
-class CustomSignupForm(SignupForm):
+class CustomSignupForm(forms.Form):
     """
     Custom signup form for django-allauth.
     """
@@ -40,8 +43,7 @@ class CustomSignupForm(SignupForm):
     is_student = forms.BooleanField(required=False, initial=True, label=_('I am a student'))
     is_instructor = forms.BooleanField(required=False, label=_('I am an instructor'))
     
-    def save(self, request):
-        user = super(CustomSignupForm, self).save(request)
+    def save(self, user):
         user.first_name = self.cleaned_data['first_name']
         user.last_name = self.cleaned_data['last_name']
         user.is_student = self.cleaned_data.get('is_student', True)
@@ -102,20 +104,11 @@ class UserUpdateForm(forms.ModelForm):
     """
     Form for updating user information.
     """
+    email = forms.EmailField(max_length=254, required=True)
+    
     class Meta:
-        model = CustomUser
-        fields = ['username', 'email', 'first_name', 'last_name', 'profile_picture', 
-                 'date_of_birth', 'bio', 'learning_style']
-        widgets = {
-            'username': forms.TextInput(attrs={'class': 'form-control'}),
-            'email': forms.EmailInput(attrs={'class': 'form-control'}),
-            'first_name': forms.TextInput(attrs={'class': 'form-control'}),
-            'last_name': forms.TextInput(attrs={'class': 'form-control'}),
-            'profile_picture': forms.FileInput(attrs={'class': 'form-control'}),
-            'date_of_birth': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
-            'bio': forms.Textarea(attrs={'class': 'form-control', 'rows': 4}),
-            'learning_style': forms.TextInput(attrs={'class': 'form-control'}),
-        }
+        model = User
+        fields = ('username', 'email', 'first_name', 'last_name')
 
 
 class ProfileUpdateForm(forms.ModelForm):
@@ -134,4 +127,54 @@ class ProfileUpdateForm(forms.ModelForm):
             'email_notifications': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'achievement_notifications': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'reminder_notifications': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class SignUpForm(UserCreationForm):
+    """
+    Form for user registration
+    """
+    email = forms.EmailField(max_length=254, required=True, help_text='Required. Enter a valid email address.')
+    first_name = forms.CharField(max_length=30, required=False, help_text='Optional.')
+    last_name = forms.CharField(max_length=30, required=False, help_text='Optional.')
+    user_type = forms.ChoiceField(
+        choices=[('student', 'Student'), ('instructor', 'Instructor')],
+        required=True,
+        help_text='Select your role'
+    )
+    
+    class Meta:
+        model = User
+        fields = ('username', 'email', 'first_name', 'last_name', 'user_type', 'password1', 'password2')
+    
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.email = self.cleaned_data['email']
+        user.first_name = self.cleaned_data['first_name']
+        user.last_name = self.cleaned_data['last_name']
+        
+        # Set user type (student or instructor)
+        user_type = self.cleaned_data['user_type']
+        if user_type == 'instructor':
+            user.is_instructor = True
+        else:
+            user.is_student = True
+        
+        if commit:
+            user.save()
+        return user
+
+
+class ProfileForm(forms.ModelForm):
+    """
+    Form for updating user profile
+    """
+    class Meta:
+        model = UserProfile
+        fields = ('location', 'website', 'interests', 'content_difficulty_preference')
+        widgets = {
+            'location': forms.TextInput(attrs={'class': 'form-control'}),
+            'website': forms.URLInput(attrs={'class': 'form-control'}),
+            'interests': forms.TextInput(attrs={'class': 'form-control'}),
+            'content_difficulty_preference': forms.Select(attrs={'class': 'form-select'}),
         } 

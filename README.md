@@ -10,6 +10,7 @@ EduMate is a gamified EdTech web application designed to enhance learning engage
 - **Real-Time Feedback:** Offers instant AI-generated insights to guide learners effectively.
 - **Gamified Learning Modules:** Incorporates quizzes, missions, and streak tracking to sustain motivation.
 - **Learning Analytics Dashboard:** Enables tracking of user progress, strengths, and improvement areas.
+- **Study Planner:** Helps students organize their study sessions and track their progress.
 
 ## Technology Stack
 
@@ -18,7 +19,7 @@ EduMate is a gamified EdTech web application designed to enhance learning engage
 - **Database:** PostgreSQL (SQLite for development)
 - **AI/ML Integration:** Deepseek, ChatGPT
 
-## Setup Instructions
+## Installation
 
 1. Clone the repository:
    ```
@@ -26,45 +27,51 @@ EduMate is a gamified EdTech web application designed to enhance learning engage
    cd edumate
    ```
 
-2. Create and activate a virtual environment:
+2. Create a virtual environment and activate it:
    ```
    python -m venv venv
-   # On Windows
-   venv\Scripts\activate
-   # On macOS/Linux
-   source venv/bin/activate
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. Install dependencies:
+3. Install the dependencies:
    ```
    pip install -r requirements.txt
    ```
 
-4. Set up environment variables:
-   Create a `.env` file in the project root with the following variables:
+4. Run the migrations:
    ```
-   SECRET_KEY=your_secret_key
-   DEBUG=True
-   DATABASE_URL=sqlite:///db.sqlite3
-   OPENAI_API_KEY=your_openai_api_key
-   ```
-
-5. Run migrations:
-   ```
+   python manage.py makemigrations
    python manage.py migrate
    ```
 
-6. Create a superuser:
+5. Create a superuser:
    ```
    python manage.py createsuperuser
    ```
 
-7. Run the development server:
+6. Start the development server:
    ```
    python manage.py runserver
    ```
 
-8. Access the application at http://127.0.0.1:8000/
+7. Access the application at http://localhost:8000/
+
+## Usage
+
+### For Instructors
+
+1. Log in with your instructor account.
+2. Create courses, modules, and content.
+3. Add quizzes and questions to assess student knowledge.
+4. Monitor student progress through the instructor dashboard.
+
+### For Students
+
+1. Browse available courses and enroll.
+2. Access course content and take quizzes.
+3. Track your progress through the learning path.
+4. Use the study planner to organize your study sessions.
+5. Get personalized recommendations based on your performance.
 
 ## Project Structure
 
@@ -73,10 +80,23 @@ EduMate is a gamified EdTech web application designed to enhance learning engage
 - `gamification/` - Points, badges, leaderboards, and achievements
 - `analytics/` - Learning analytics and AI-driven insights
 - `api/` - Django REST framework API endpoints
+- `templates/`: HTML templates for rendering pages
+  - `courses/`: Templates for course-related pages
+  - `courses/content_types/`: Templates for different content types (video, blog, quiz)
+  - `courses/instructor/`: Templates for instructor-facing pages
+- `static/`: Static files (CSS, JavaScript, images)
+- `media/`: User-uploaded files
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgements
+
+- Django - The web framework used
+- Bootstrap - For responsive design
+- FullCalendar - For the study planner calendar
+- Chart.js - For data visualization
 
 ## Contact
 
