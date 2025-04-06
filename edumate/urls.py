@@ -28,7 +28,6 @@ urlpatterns = [
     path('gamification/', include('gamification.urls')),
     path('analytics/', include('analytics.urls')),
     path('api/', include('api.urls')),
-    path('accounts/', include('django.contrib.auth.urls')),
 ]
 
 if settings.DEBUG:

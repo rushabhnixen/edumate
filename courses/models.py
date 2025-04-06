@@ -67,6 +67,13 @@ class Course(models.Model):
     )
     prerequisites = models.TextField(blank=True)
     learning_outcomes = models.TextField(_('Learning Outcomes'))
+    price = models.DecimalField(
+        _('Price'),
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        help_text=_('Course price (0 for free)')
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_published = models.BooleanField(default=False)
@@ -214,6 +221,7 @@ class Question(models.Model):
         on_delete=models.CASCADE,
         related_name='questions'
     )
+    title = models.CharField(_('Question Title'), max_length=200, default='')
     text = models.TextField(_('Question Text'))
     question_type = models.CharField(
         _('Question Type'),

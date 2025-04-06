@@ -11,6 +11,8 @@ urlpatterns = [
     path('enroll/<slug:slug>/', views.enroll_course, name='enroll_course'),
     path('content/<slug:slug>/', views.course_content, name='course_content'),
     path('content/view/<int:content_id>/', views.view_content, name='view_content'),
+    path('<slug:course_slug>/lesson/<int:lesson_id>/', views.lesson_detail, name='lesson_detail'),
+    path('<slug:course_slug>/quiz/<int:quiz_id>/', views.quiz_detail, name='quiz_detail'),
     path('quiz/<int:quiz_id>/take/', views.take_quiz, name='take_quiz'),
     path('quiz/results/<int:attempt_id>/', views.quiz_results, name='quiz_results'),
     path('quiz/result/<int:attempt_id>/', views.quiz_result, name='quiz_result'),
@@ -24,10 +26,18 @@ urlpatterns = [
     path('instructor/course/<int:course_id>/delete/', views.delete_course, name='delete_course'),
     path('instructor/module/<int:module_id>/content/', views.module_content_list, name='module_content_list'),
     path('instructor/module/<int:module_id>/content/add/', views.add_module_content, name='add_module_content'),
-    path('instructor/content/<int:content_id>/quiz/create/', views.create_quiz, name='create_quiz'),
+    path('instructor/module/<int:module_id>/quiz/create/', views.create_quiz, name='create_quiz'),
+    path('instructor/quiz/<int:quiz_id>/edit/', views.edit_quiz, name='edit_quiz'),
+    path('instructor/quiz/<int:quiz_id>/delete/', views.delete_quiz, name='delete_quiz'),
+    path('instructor/question/<int:question_id>/answers/', views.add_question_answers, name='add_question_answers'),
+    
+    # Content management URLs
+    path('instructor/lesson/<int:lesson_id>/edit/', views.edit_lesson, name='edit_lesson'),
+    path('instructor/video/<int:video_id>/edit/', views.edit_video, name='edit_video'),
     path('instructor/quiz/<int:quiz_id>/questions/', views.add_quiz_questions, name='add_quiz_questions'),
     path('instructor/quiz/<int:quiz_id>/questions/list/', views.quiz_questions_list, name='quiz_questions_list'),
-    path('instructor/question/<int:question_id>/answers/', views.add_question_answers, name='add_question_answers'),
+    path('instructor/lesson/<int:lesson_id>/delete/', views.delete_lesson, name='delete_lesson'),
+    path('instructor/video/<int:video_id>/delete/', views.delete_video, name='delete_video'),
 
     # Add the study planner URL pattern
     path('study-planner/', views.study_planner, name='study_planner'),

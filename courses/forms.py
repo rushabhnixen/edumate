@@ -8,15 +8,33 @@ class CourseForm(forms.ModelForm):
     """
     class Meta:
         model = Course
-        fields = ['title', 'description', 'category', 'difficulty', 'thumbnail', 'prerequisites', 'is_published']
+        fields = [
+            'title', 
+            'overview',
+            'description', 
+            'category', 
+            'difficulty', 
+            'thumbnail', 
+            'prerequisites', 
+            'learning_outcomes',
+            'price',
+            'is_published'
+        ]
         widgets = {
-            'description': forms.Textarea(attrs={'rows': 5}),
+            'overview': forms.Textarea(attrs={'rows': 3, 'placeholder': 'A brief overview of the course'}),
+            'description': forms.Textarea(attrs={'rows': 5, 'placeholder': 'Detailed course description'}),
             'thumbnail': forms.FileInput(attrs={'class': 'form-control'}),
-            'prerequisites': forms.Textarea(attrs={'rows': 3}),
+            'prerequisites': forms.Textarea(attrs={'rows': 3, 'placeholder': 'Required prerequisites for this course'}),
+            'learning_outcomes': forms.Textarea(attrs={'rows': 3, 'placeholder': 'What students will learn from this course'}),
+            'price': forms.NumberInput(attrs={'class': 'form-control', 'placeholder': 'Course price (0 for free)'}),
         }
         help_texts = {
+            'overview': 'A short summary that appears in course listings.',
+            'description': 'Detailed information about the course content and structure.',
             'is_published': 'Check this box to make the course visible to students.',
             'prerequisites': 'List any prerequisites or prior knowledge required for this course.',
+            'learning_outcomes': 'List the key skills and knowledge students will gain.',
+            'price': 'Set the course price (enter 0 for a free course).',
         }
 
 class ModuleForm(forms.ModelForm):
@@ -37,8 +55,14 @@ ModuleFormSet = inlineformset_factory(
     Course, 
     Module, 
     form=ModuleForm,
-    extra=1,
-    can_delete=True
+    fields=['title', 'description', 'order'],
+    extra=1,  # Show 1 empty form by default
+    can_delete=True,
+    min_num=1,  # Require at least one module
+    validate_min=True,
+    max_num=20,  # Allow up to 20 modules
+    validate_max=True,
+    absolute_max=20
 )
 
 class ContentForm(forms.Form):
@@ -77,19 +101,21 @@ class ContentForm(forms.Form):
         return cleaned_data
 
 class QuizForm(forms.ModelForm):
-    """
-    Form for creating and editing quizzes
-    """
+    """Form for creating and editing quizzes."""
+    
     class Meta:
         model = Quiz
-        # Make sure these fields match the Quiz model
         fields = ['title', 'description', 'time_limit', 'passing_score', 'order']
         widgets = {
-            'title': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Quiz title'}),
-            'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Quiz description'}),
-            'time_limit': forms.NumberInput(attrs={'class': 'form-control', 'placeholder': 'Time limit in minutes (0 for no limit)'}),
-            'passing_score': forms.NumberInput(attrs={'class': 'form-control', 'placeholder': 'Passing score percentage (e.g., 70)'}),
-            'order': forms.NumberInput(attrs={'class': 'form-control', 'placeholder': 'Order in module'})
+            'description': forms.Textarea(attrs={'rows': 4}),
+            'time_limit': forms.NumberInput(attrs={'min': 1, 'max': 180}),
+            'passing_score': forms.NumberInput(attrs={'min': 0, 'max': 100}),
+            'order': forms.NumberInput(attrs={'min': 0})
+        }
+        help_texts = {
+            'time_limit': 'Time limit in minutes (1-180)',
+            'passing_score': 'Minimum score required to pass the quiz (0-100)',
+            'order': 'Order in which this quiz appears in the module'
         }
 
 class QuestionForm(forms.ModelForm):

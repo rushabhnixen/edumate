@@ -103,17 +103,14 @@
                                             <p><strong>Type:</strong> {{ question.get_question_type_display }}</p>
                                             <p><strong>Points:</strong> {{ question.points }}</p>
                                             
-                                            {% if question.answer_set.all %}
-                                                <h6 class="mt-3">Answers:</h6>
+                                            {% if question.answers.all %}
+                                                <h6 class="mt-3">Answer Options:</h6>
                                                 <ul class="list-group">
-                                                    {% for answer in question.answer_set.all %}
+                                                    {% for answer in question.answers.all %}
                                                         <li class="list-group-item {% if answer.is_correct %}list-group-item-success{% endif %}">
                                                             {{ answer.text }}
                                                             {% if answer.is_correct %}
-                                                                <span class="badge bg-success float-end">Correct</span>
-                                                            {% endif %}
-                                                            {% if answer.explanation %}
-                                                                <div class="text-muted small mt-1">{{ answer.explanation }}</div>
+                                                                <span class="badge bg-success float-end">Correct Answer</span>
                                                             {% endif %}
                                                         </li>
                                                     {% endfor %}
@@ -121,7 +118,7 @@
                                             {% else %}
                                                 <div class="alert alert-warning">
                                                     <i class="fas fa-exclamation-triangle me-2"></i>
-                                                    No answers added yet.
+                                                    No answer options added yet.
                                                 </div>
                                             {% endif %}
                                             

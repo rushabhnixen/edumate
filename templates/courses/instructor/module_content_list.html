@@ -68,8 +68,11 @@
                                         <small class="text-muted">Lesson</small>
                                     </div>
                                     <div>
-                                        <a href="#" class="btn btn-sm btn-outline-primary me-2">Edit</a>
-                                        <a href="#" class="btn btn-sm btn-outline-danger">Delete</a>
+                                        <a href="{% url 'courses:edit_lesson' lesson.id %}" class="btn btn-sm btn-outline-primary me-2">Edit</a>
+                                        <form method="post" action="{% url 'courses:delete_lesson' lesson.id %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this lesson?')">Delete</button>
+                                        </form>
                                     </div>
                                 </div>
                             </div>
@@ -83,8 +86,11 @@
                                         <small class="text-muted">Video</small>
                                     </div>
                                     <div>
-                                        <a href="#" class="btn btn-sm btn-outline-primary me-2">Edit</a>
-                                        <a href="#" class="btn btn-sm btn-outline-danger">Delete</a>
+                                        <a href="{% url 'courses:edit_video' video.id %}" class="btn btn-sm btn-outline-primary me-2">Edit</a>
+                                        <form method="post" action="{% url 'courses:delete_video' video.id %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this video?')">Delete</button>
+                                        </form>
                                     </div>
                                 </div>
                             </div>
@@ -99,8 +105,11 @@
                                     </div>
                                     <div>
                                         <a href="{% url 'courses:quiz_questions_list' quiz.id %}" class="btn btn-sm btn-outline-success me-2">Questions</a>
-                                        <a href="#" class="btn btn-sm btn-outline-primary me-2">Edit</a>
-                                        <a href="#" class="btn btn-sm btn-outline-danger">Delete</a>
+                                        <a href="{% url 'courses:edit_quiz' quiz.id %}" class="btn btn-sm btn-outline-primary me-2">Edit</a>
+                                        <form method="post" action="{% url 'courses:delete_quiz' quiz.id %}" class="d-inline">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this quiz?')">Delete</button>
+                                        </form>
                                     </div>
                                 </div>
                             </div>

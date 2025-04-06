@@ -15,6 +15,7 @@ import json
 from datetime import datetime, timedelta
 import random
 from django.forms import inlineformset_factory
+import re
 
 from .models import (
     Category, Course, Module, Lesson, Video, Quiz,
@@ -117,7 +118,7 @@ def enroll_course(request, slug):
         messages.info(request, f"You are already enrolled in {course.title}")
         return redirect('courses:course_detail', slug=slug)
     
-    # Check if user is the instructor
+    # Check if user is the instructor of this course
     if request.user == course.instructor:
         messages.warning(request, "You cannot enroll in your own course")
         return redirect('courses:course_detail', slug=slug)
@@ -139,9 +140,10 @@ def enroll_course(request, slug):
     # Record user activity
     UserActivity.objects.create(
         user=request.user,
-        activity_type='course_view',
+        activity_type='course_enrollment',
         content_type=ContentType.objects.get_for_model(course),
-        object_id=course.id
+        object_id=course.id,
+        data={'message': f"Enrolled in course: {course.title}"}
     )
     
     # Check for first enrollment achievement
@@ -163,40 +165,20 @@ def enroll_course(request, slug):
 @login_required
 def my_courses(request):
     """
-    View for the my courses page.
+    View for displaying the student's enrolled courses.
     """
-    user = request.user
+    # Get user's enrolled courses through enrollments
+    enrolled_courses = Enrollment.objects.filter(
+        student=request.user
+    ).select_related('course').order_by('-enrolled_at')
     
-    # Get user's enrolled courses
-    enrolled_courses = Course.objects.filter(students=user).order_by('-updated_at')
-    
-    # Get course progress for each course
-    courses_with_progress = []
-    for course in enrolled_courses:
-        # Calculate progress based on completed content items
-        # In a real implementation, this would be stored in a separate model
-        # For now, we'll use a random value for demonstration
-        progress = getattr(course, 'progress', random.randint(0, 100))
-        
-        # Get last accessed time
-        last_accessed = course.updated_at
-        
-        courses_with_progress.append({
-            'course': course,
-            'progress': progress,
-            'last_accessed': last_accessed,
-        })
-    
-    # Sort courses by last accessed time (most recent first)
-    courses_with_progress = sorted(
-        courses_with_progress,
-        key=lambda x: x['last_accessed'],
-        reverse=True
-    )
+    # Count completed courses
+    completed_courses_count = enrolled_courses.filter(status='completed').count()
     
     # Prepare context
     context = {
-        'courses': courses_with_progress,
+        'enrolled_courses': enrolled_courses,
+        'completed_courses_count': completed_courses_count
     }
     
     return render(request, 'courses/my_courses.html', context)
@@ -265,12 +247,23 @@ def lesson_detail(request, course_slug, lesson_id):
         
         return redirect('courses:lesson_detail', course_slug=course_slug, lesson_id=lesson_id)
     
+    # Add debug information
+    print(f"Course: {course.title}")
+    print(f"Lesson: {lesson.title}")
+    print(f"Content: {lesson.content[:100]}...")  # Print first 100 chars of content
+    
     context = {
         'course': course,
         'lesson': lesson,
         'enrollment': enrollment,
         'progress': progress,
-        'is_completed': lesson in progress.completed_lessons.all()
+        'is_completed': lesson in progress.completed_lessons.all(),
+        'debug_info': {
+            'course_title': course.title,
+            'lesson_title': lesson.title,
+            'content_length': len(lesson.content) if lesson.content else 0,
+            'module_title': lesson.module.title,
+        }
     }
     
     return render(request, 'courses/lesson_detail.html', context)
@@ -339,9 +332,9 @@ def quiz_detail(request, course_slug, quiz_id):
     # Check if quiz is already completed
     is_completed = quiz in progress.completed_quizzes.all()
     
-    # Get previous attempts
+    # Get previous attempts - Changed 'student' to 'user'
     previous_attempts = QuizAttempt.objects.filter(
-        student=request.user,
+        user=request.user,
         quiz=quiz
     ).order_by('-started_at')
     
@@ -836,16 +829,26 @@ def take_quiz(request, quiz_id):
         completed=False
     ).first()
     
+    # Calculate total points from questions
+    total_points = sum(question.points for question in quiz.questions.all())
+    
     if not active_attempt:
         # Create a new quiz attempt
         active_attempt = QuizAttempt.objects.create(
             user=user,
             quiz=quiz,
-            max_score=quiz.total_points
+            max_score=total_points
         )
     
-    # Get all questions for this quiz
-    questions = Question.objects.filter(quiz=quiz)
+    # Get all questions for this quiz with their answers
+    questions = Question.objects.filter(quiz=quiz).prefetch_related('answers').order_by('order')
+    
+    # Add debug information
+    print(f"Quiz: {quiz.title}")
+    print(f"Questions count: {questions.count()}")
+    for q in questions:
+        print(f"Question: {q.text}")
+        print(f"Answers count: {q.answers.count()}")
     
     if request.method == 'POST':
         # Process quiz submission
@@ -887,7 +890,7 @@ def take_quiz(request, quiz_id):
             score_percentage = (correct_answers / total_questions) * 100 if total_questions > 0 else 0
             
             # Update quiz attempt
-            active_attempt.score = correct_answers * (quiz.total_points / total_questions) if total_questions > 0 else 0
+            active_attempt.score = correct_answers * (total_points / total_questions) if total_questions > 0 else 0
             active_attempt.completed = True
             active_attempt.completed_at = datetime.now()
             active_attempt.passed = score_percentage >= quiz.passing_score
@@ -906,6 +909,12 @@ def take_quiz(request, quiz_id):
         'questions': questions,
         'user_answers': user_answers,
         'attempt': active_attempt,
+        'content': quiz,  # Add the quiz as content for the template
+        'debug_info': {
+            'quiz_title': quiz.title,
+            'questions_count': questions.count(),
+            'has_questions': questions.exists(),
+        }
     }
     
     return render(request, 'courses/content_types/quiz_take.html', context)
@@ -1709,6 +1718,7 @@ def edit_course(request, course_id):
         form = CourseForm(request.POST, request.FILES, instance=course)
         if form.is_valid():
             form.save()
+            messages.success(request, f'Course "{course.title}" has been updated successfully!')
             return redirect('courses:instructor_courses')
     else:
         form = CourseForm(instance=course)
@@ -1832,16 +1842,10 @@ def add_module_content(request, module_id):
                 return redirect('courses:module_content_list', module_id=module.id)
                 
             elif content_type == 'quiz':
-                quiz = Quiz.objects.create(
-                    module=module,
-                    title=form.cleaned_data['title'],
-                    description=form.cleaned_data['description'],
-                    order=form.cleaned_data['order'],
-                    time_limit=form.cleaned_data['time_limit'],
-                    passing_score=form.cleaned_data['passing_score']
+                # For quiz, redirect to the quiz creation form with initial data
+                return redirect(
+                    f"/courses/instructor/module/{module_id}/quiz/create/?title={form.cleaned_data['title']}&description={form.cleaned_data['description']}&order={form.cleaned_data['order']}"
                 )
-                messages.success(request, 'Quiz created! Add questions now.')
-                return redirect('courses:add_quiz_questions', quiz_id=quiz.id)
     else:
         form = ContentForm()
     
@@ -1852,36 +1856,191 @@ def add_module_content(request, module_id):
 
 
 @login_required
-def create_quiz(request, content_id):
-    """
-    View for creating a quiz.
-    """
-    # Get the content
-    try:
-        content = Quiz.objects.get(id=content_id)
-    except Quiz.DoesNotExist:
-        raise Http404("Quiz not found")
+def create_quiz(request, module_id):
+    """Create a new quiz."""
+    module = get_object_or_404(Module, id=module_id)
     
-    # Check if user is the instructor of the course
-    if request.user != content.module.course.instructor and not request.user.is_superuser:
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
         return redirect('courses:course_list')
     
-    # Handle form submission
     if request.method == 'POST':
-        form = QuizForm(request.POST, instance=content)
+        form = QuizForm(request.POST)
         if form.is_valid():
-            form.save()
-            return redirect('courses:quiz_questions_list', quiz_id=content.id)
+            quiz = form.save(commit=False)
+            quiz.module = module
+            quiz.save()
+            
+            # Process questions and answers
+            questions_data = {}
+            deleted_questions = request.POST.getlist('deleted_questions[]')
+            
+            # Delete questions marked for deletion
+            if deleted_questions:
+                Question.objects.filter(id__in=deleted_questions).delete()
+            
+            # Process form data to get questions
+            for key, value in request.POST.items():
+                if key.startswith('questions['):
+                    # Extract question ID/key and field name
+                    match = re.match(r'questions\[(new_\d+|\d+)\]\[(\w+)\](?:\[\])?', key)
+                    if match:
+                        q_id, field = match.groups()
+                        if q_id not in questions_data:
+                            questions_data[q_id] = {
+                                'title': '',
+                                'text': '',
+                                'points': 1,
+                                'order': 0,
+                                'answers': [],
+                                'correct_answer': 0
+                            }
+                        
+                        if field == 'answers':
+                            questions_data[q_id]['answers'].append(value)
+                        else:
+                            questions_data[q_id][field] = value
+            
+            # Create or update questions
+            for q_id, data in questions_data.items():
+                if not data.get('text') or not data.get('answers'):
+                    continue
+                
+                if q_id.startswith('new_'):
+                    # Create new question
+                    question = Question.objects.create(
+                        quiz=quiz,
+                        title=data['title'],
+                        text=data['text'],
+                        points=data['points'],
+                        order=data['order']
+                    )
+                else:
+                    # Update existing question
+                    question = Question.objects.get(id=q_id)
+                    question.title = data['title']
+                    question.text = data['text']
+                    question.points = data['points']
+                    question.order = data['order']
+                    question.save()
+                    # Delete existing answers
+                    question.answers.all().delete()
+                
+                # Create answers for the question
+                correct_answer_idx = int(data.get('correct_answer', 0))
+                for idx, answer_text in enumerate(data['answers']):
+                    Answer.objects.create(
+                        question=question,
+                        text=answer_text,
+                        is_correct=(idx == correct_answer_idx)
+                    )
+            
+            messages.success(request, 'Quiz created successfully!')
+            return redirect('courses:module_content_list', module_id=module.id)
     else:
-        form = QuizForm(instance=content)
+        # Get initial data from query parameters
+        initial_data = {
+            'title': request.GET.get('title', ''),
+            'description': request.GET.get('description', ''),
+            'order': request.GET.get('order', 0)
+        }
+        form = QuizForm(initial=initial_data)
     
-    # Prepare context
-    context = {
+    return render(request, 'courses/instructor/quiz_form.html', {
         'form': form,
-        'quiz': content,
-    }
+        'module': module
+    })
+
+
+@login_required
+def edit_quiz(request, quiz_id):
+    """Edit an existing quiz."""
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    module = quiz.module
     
-    return render(request, 'courses/instructor/quiz_form.html', context)
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        form = QuizForm(request.POST, instance=quiz)
+        if form.is_valid():
+            quiz = form.save()
+            
+            # Process questions and answers
+            questions_data = {}
+            deleted_questions = request.POST.getlist('deleted_questions[]')
+            
+            # Delete questions marked for deletion
+            if deleted_questions:
+                Question.objects.filter(id__in=deleted_questions).delete()
+            
+            # Process form data to get questions
+            for key, value in request.POST.items():
+                if key.startswith('questions['):
+                    # Extract question ID/key and field name
+                    match = re.match(r'questions\[(new_\d+|\d+)\]\[(\w+)\](?:\[\])?', key)
+                    if match:
+                        q_id, field = match.groups()
+                        if q_id not in questions_data:
+                            questions_data[q_id] = {
+                                'title': '',
+                                'text': '',
+                                'points': 1,
+                                'order': 0,
+                                'answers': [],
+                                'correct_answer': 0
+                            }
+                        
+                        if field == 'answers':
+                            questions_data[q_id]['answers'].append(value)
+                        else:
+                            questions_data[q_id][field] = value
+            
+            # Create or update questions
+            for q_id, data in questions_data.items():
+                if not data.get('text') or not data.get('answers'):
+                    continue
+                
+                if q_id.startswith('new_'):
+                    # Create new question
+                    question = Question.objects.create(
+                        quiz=quiz,
+                        title=data['title'],
+                        text=data['text'],
+                        points=data['points'],
+                        order=data['order']
+                    )
+                else:
+                    # Update existing question
+                    question = Question.objects.get(id=q_id)
+                    question.title = data['title']
+                    question.text = data['text']
+                    question.points = data['points']
+                    question.order = data['order']
+                    question.save()
+                    # Delete existing answers
+                    question.answers.all().delete()
+                
+                # Create answers for the question
+                correct_answer_idx = int(data.get('correct_answer', 0))
+                for idx, answer_text in enumerate(data['answers']):
+                    Answer.objects.create(
+                        question=question,
+                        text=answer_text,
+                        is_correct=(idx == correct_answer_idx)
+                    )
+            
+            messages.success(request, 'Quiz updated successfully!')
+            return redirect('courses:module_content_list', module_id=module.id)
+    else:
+        form = QuizForm(instance=quiz)
+    
+    return render(request, 'courses/instructor/quiz_form.html', {
+        'form': form,
+        'quiz': quiz,
+        'module': module
+    })
 
 
 @login_required
@@ -1891,6 +2050,8 @@ def quiz_questions_list(request, quiz_id):
     """
     # Get the quiz
     quiz = get_object_or_404(Quiz, id=quiz_id)
+    module = quiz.module
+    course = module.course
     
     # Check if user is the instructor of the course
     if request.user != quiz.module.course.instructor and not request.user.is_superuser:
@@ -1900,6 +2061,8 @@ def quiz_questions_list(request, quiz_id):
     context = {
         'quiz': quiz,
         'questions': quiz.questions.all().order_by('order'),
+        'module': module,
+        'course': course,
     }
     
     return render(request, 'courses/instructor/quiz_questions_list.html', context)
@@ -1964,4 +2127,179 @@ def add_question_answers(request, question_id):
         'question': question,
     }
     
-    return render(request, 'courses/instructor/answer_formset.html', context) 
+    return render(request, 'courses/instructor/answer_formset.html', context)
+
+
+@login_required
+def edit_lesson(request, lesson_id):
+    """Edit a lesson."""
+    lesson = get_object_or_404(Lesson, id=lesson_id)
+    module = lesson.module
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        form = ContentForm(request.POST)
+        if form.is_valid():
+            lesson.title = form.cleaned_data['title']
+            lesson.content = form.cleaned_data['text_content']
+            lesson.order = form.cleaned_data['order']
+            lesson.save()
+            messages.success(request, 'Lesson updated successfully!')
+            return redirect('courses:module_content_list', module_id=module.id)
+    else:
+        form = ContentForm(initial={
+            'content_type': 'lesson',
+            'title': lesson.title,
+            'text_content': lesson.content,
+            'order': lesson.order
+        })
+    
+    return render(request, 'courses/instructor/edit_content.html', {
+        'form': form,
+        'module': module,
+        'content': lesson,
+        'content_type': 'lesson'
+    })
+
+
+@login_required
+def edit_video(request, video_id):
+    """Edit a video."""
+    video = get_object_or_404(Video, id=video_id)
+    module = video.module
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        form = ContentForm(request.POST)
+        if form.is_valid():
+            video.title = form.cleaned_data['title']
+            video.url = form.cleaned_data['video_url']
+            video.order = form.cleaned_data['order']
+            video.save()
+            messages.success(request, 'Video updated successfully!')
+            return redirect('courses:module_content_list', module_id=module.id)
+    else:
+        form = ContentForm(initial={
+            'content_type': 'video',
+            'title': video.title,
+            'video_url': video.url,
+            'order': video.order
+        })
+    
+    return render(request, 'courses/instructor/edit_content.html', {
+        'form': form,
+        'module': module,
+        'content': video,
+        'content_type': 'video'
+    })
+
+
+@login_required
+def edit_quiz(request, quiz_id):
+    """Edit a quiz."""
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    module = quiz.module
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        form = ContentForm(request.POST)
+        if form.is_valid():
+            quiz.title = form.cleaned_data['title']
+            quiz.description = form.cleaned_data['description']
+            quiz.order = form.cleaned_data['order']
+            quiz.time_limit = form.cleaned_data['time_limit']
+            quiz.passing_score = form.cleaned_data['passing_score']
+            quiz.save()
+            messages.success(request, 'Quiz updated successfully!')
+            return redirect('courses:module_content_list', module_id=module.id)
+    else:
+        form = ContentForm(initial={
+            'content_type': 'quiz',
+            'title': quiz.title,
+            'description': quiz.description,
+            'order': quiz.order,
+            'time_limit': quiz.time_limit,
+            'passing_score': quiz.passing_score
+        })
+    
+    return render(request, 'courses/instructor/edit_content.html', {
+        'form': form,
+        'module': module,
+        'content': quiz,
+        'content_type': 'quiz'
+    })
+
+
+@login_required
+def delete_lesson(request, lesson_id):
+    """Delete a lesson."""
+    lesson = get_object_or_404(Lesson, id=lesson_id)
+    module = lesson.module
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        lesson.delete()
+        messages.success(request, 'Lesson deleted successfully!')
+        return redirect('courses:module_content_list', module_id=module.id)
+    
+    return render(request, 'courses/instructor/delete_content.html', {
+        'module': module,
+        'content': lesson,
+        'content_type': 'lesson'
+    })
+
+
+@login_required
+def delete_video(request, video_id):
+    """Delete a video."""
+    video = get_object_or_404(Video, id=video_id)
+    module = video.module
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        video.delete()
+        messages.success(request, 'Video deleted successfully!')
+        return redirect('courses:module_content_list', module_id=module.id)
+    
+    return render(request, 'courses/instructor/delete_content.html', {
+        'module': module,
+        'content': video,
+        'content_type': 'video'
+    })
+
+
+@login_required
+def delete_quiz(request, quiz_id):
+    """Delete a quiz."""
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+    module = quiz.module
+    
+    # Check if user is the instructor
+    if request.user != module.course.instructor and not request.user.is_superuser:
+        return redirect('courses:course_list')
+    
+    if request.method == 'POST':
+        quiz.delete()
+        messages.success(request, 'Quiz deleted successfully!')
+        return redirect('courses:module_content_list', module_id=module.id)
+    
+    return render(request, 'courses/instructor/delete_content.html', {
+        'module': module,
+        'content': quiz,
+        'content_type': 'quiz'
+    }) 

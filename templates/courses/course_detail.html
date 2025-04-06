@@ -42,10 +42,14 @@
                         {% if is_enrolled %}
                         <a href="{% url 'courses:module_list' slug=course.slug %}" class="btn btn-success">Continue Learning</a>
                         {% else %}
-                        <form action="{% url 'courses:enroll_course' slug=course.slug %}" method="post">
-                            {% csrf_token %}
-                            <button type="submit" class="btn btn-primary">Enroll Now</button>
-                        </form>
+                            {% if user == course.instructor %}
+                            <button class="btn btn-secondary" disabled>You are the instructor</button>
+                            {% else %}
+                            <form action="{% url 'courses:enroll_course' slug=course.slug %}" method="post">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-primary">Enroll Now</button>
+                            </form>
+                            {% endif %}
                         {% endif %}
                     </div>
                     

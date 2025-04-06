@@ -21,6 +21,16 @@
             </div>
         </div>
         <div class="card-body">
+            <!-- Debug Info -->
+            {% if debug_info %}
+            <div class="alert alert-info">
+                <h5>Debug Information:</h5>
+                <p>Quiz Title: {{ debug_info.quiz_title }}</p>
+                <p>Questions Count: {{ debug_info.questions_count }}</p>
+                <p>Has Questions: {{ debug_info.has_questions }}</p>
+            </div>
+            {% endif %}
+
             <form method="post" id="quiz-form">
                 {% csrf_token %}
                 
@@ -38,22 +48,20 @@
                             <div class="card-body">
                                 <p class="lead">{{ question.text }}</p>
                                 
-                                {% if question.question_type == 'multiple_choice' %}
-                                    <div class="answers-container">
-                                        {% for answer in question.answer_set.all %}
-                                            <div class="form-check mb-3">
-                                                <input class="form-check-input" type="radio" name="question_{{ question.id }}" id="answer_{{ answer.id }}" value="{{ answer.id }}">
-                                                <label class="form-check-label" for="answer_{{ answer.id }}">
-                                                    {{ answer.text }}
-                                                </label>
-                                            </div>
-                                        {% endfor %}
-                                    </div>
-                                {% elif question.question_type == 'text' %}
-                                    <div class="mb-3">
-                                        <textarea class="form-control" name="question_{{ question.id }}" rows="5" placeholder="Type your answer here..."></textarea>
-                                    </div>
-                                {% endif %}
+                                <div class="answers-container">
+                                    {% for answer in question.answers.all %}
+                                        <div class="form-check mb-3">
+                                            <input class="form-check-input" type="radio" 
+                                                   name="question_{{ question.id }}" 
+                                                   id="answer_{{ answer.id }}" 
+                                                   value="{{ answer.id }}"
+                                                   {% if user_answers and user_answers|get_item:question.id == answer.id %}checked{% endif %}>
+                                            <label class="form-check-label" for="answer_{{ answer.id }}">
+                                                {{ answer.text }}
+                                            </label>
+                                        </div>
+                                    {% endfor %}
+                                </div>
                             </div>
                         </div>
                         
@@ -71,11 +79,16 @@
                                     Next Question <i class="fas fa-arrow-right ms-1"></i>
                                 </button>
                             {% else %}
-                                <button type="submit" class="btn btn-success">
+                                <button type="submit" name="submit_quiz" class="btn btn-success">
                                     <i class="fas fa-check-circle me-1"></i> Submit Quiz
                                 </button>
                             {% endif %}
                         </div>
+                    </div>
+                {% empty %}
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        No questions are available for this quiz yet.
                     </div>
                 {% endfor %}
                 
@@ -90,13 +103,15 @@
         </div>
         <div class="card-footer">
             <div class="d-flex justify-content-between align-items-center">
-                <a href="{% url 'courses:view_content' content.id %}" class="btn btn-outline-secondary" id="exit-quiz">
+                <a href="{% url 'courses:view_content' content.id %}" class="btn btn-outline-secondary">
                     <i class="fas fa-times me-1"></i> Exit Quiz
                 </a>
                 
+                {% if questions %}
                 <button type="button" class="btn btn-success" id="submit-quiz-btn">
                     <i class="fas fa-check-circle me-1"></i> Submit Quiz
                 </button>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -172,10 +187,46 @@
             }, 1000);
         {% endif %}
         
-        // Navigation buttons
-        const nextButtons = document.querySelectorAll('.next-question');
-        const prevButtons = document.querySelectorAll('.prev-question');
-        const navButtons = document.querySelectorAll('.question-nav-btn');
+        // Show a specific question
+        function showQuestion(questionNumber) {
+            // Hide all questions
+            document.querySelectorAll('.question-container').forEach(container => {
+                container.style.display = 'none';
+            });
+            
+            // Show the selected question
+            const questionContainer = document.getElementById(`question-${questionNumber}`);
+            if (questionContainer) {
+                questionContainer.style.display = 'block';
+                currentQuestion = questionNumber;
+                document.getElementById('current-question').textContent = questionNumber;
+                
+                // Update navigation buttons
+                document.querySelectorAll('.question-nav-btn').forEach(btn => {
+                    btn.classList.remove('btn-primary');
+                    btn.classList.add('btn-outline-primary');
+                });
+                
+                const currentNavBtn = document.querySelector(`.question-nav-btn[data-question="${questionNumber}"]`);
+                if (currentNavBtn) {
+                    currentNavBtn.classList.remove('btn-outline-primary');
+                    currentNavBtn.classList.add('btn-primary');
+                }
+            }
+        }
+        
+        // Check if a question is answered
+        function checkIfAnswered(questionNumber) {
+            const questionContainer = document.getElementById(`question-${questionNumber}`);
+            if (!questionContainer) return false;
+            
+            const radioButtons = questionContainer.querySelectorAll('input[type="radio"]:checked');
+            if (radioButtons.length > 0) {
+                answeredQuestions.add(questionNumber);
+                return true;
+            }
+            return false;
+        }
         
         // Update progress bar
         function updateProgress() {
@@ -186,62 +237,8 @@
             progressBar.setAttribute('aria-valuenow', progress);
         }
         
-        // Show a specific question
-        function showQuestion(questionNumber) {
-            // Hide all questions
-            document.querySelectorAll('.question-container').forEach(container => {
-                container.style.display = 'none';
-            });
-            
-            // Show the selected question
-            document.getElementById(`question-${questionNumber}`).style.display = 'block';
-            
-            // Update current question indicator
-            document.getElementById('current-question').textContent = questionNumber;
-            
-            // Update nav buttons
-            navButtons.forEach(btn => {
-                btn.classList.remove('btn-primary');
-                btn.classList.add('btn-outline-primary');
-                
-                if (parseInt(btn.dataset.question) === questionNumber) {
-                    btn.classList.remove('btn-outline-primary');
-                    btn.classList.add('btn-primary');
-                }
-                
-                if (answeredQuestions.has(parseInt(btn.dataset.question))) {
-                    btn.classList.add('btn-success');
-                    btn.classList.remove('btn-outline-primary', 'btn-primary');
-                }
-            });
-            
-            currentQuestion = questionNumber;
-        }
-        
-        // Check if a question is answered
-        function checkIfAnswered(questionNumber) {
-            const questionContainer = document.getElementById(`question-${questionNumber}`);
-            const questionId = {{ questions.0.id }} + questionNumber - 1; // Assuming sequential IDs
-            
-            // Check radio buttons for multiple choice
-            const radioButtons = questionContainer.querySelectorAll(`input[name="question_${questionId}"]:checked`);
-            if (radioButtons.length > 0) {
-                answeredQuestions.add(questionNumber);
-                return true;
-            }
-            
-            // Check text input for text questions
-            const textArea = questionContainer.querySelector(`textarea[name="question_${questionId}"]`);
-            if (textArea && textArea.value.trim() !== '') {
-                answeredQuestions.add(questionNumber);
-                return true;
-            }
-            
-            return false;
-        }
-        
-        // Add event listeners to next buttons
-        nextButtons.forEach(button => {
+        // Navigation buttons
+        document.querySelectorAll('.next-question').forEach(button => {
             button.addEventListener('click', function() {
                 const questionNumber = parseInt(this.dataset.question);
                 checkIfAnswered(questionNumber);
@@ -250,8 +247,7 @@
             });
         });
         
-        // Add event listeners to previous buttons
-        prevButtons.forEach(button => {
+        document.querySelectorAll('.prev-question').forEach(button => {
             button.addEventListener('click', function() {
                 const questionNumber = parseInt(this.dataset.question);
                 checkIfAnswered(questionNumber);
@@ -260,8 +256,7 @@
             });
         });
         
-        // Add event listeners to navigation buttons
-        navButtons.forEach(button => {
+        document.querySelectorAll('.question-nav-btn').forEach(button => {
             button.addEventListener('click', function() {
                 const questionNumber = parseInt(this.dataset.question);
                 checkIfAnswered(currentQuestion);
@@ -270,26 +265,8 @@
             });
         });
         
-        // Add event listeners to radio buttons and text areas
-        document.querySelectorAll('input[type="radio"], textarea').forEach(input => {
-            input.addEventListener('change', function() {
-                checkIfAnswered(currentQuestion);
-                updateProgress();
-                
-                // Update nav button for current question
-                navButtons.forEach(btn => {
-                    if (parseInt(btn.dataset.question) === currentQuestion) {
-                        if (checkIfAnswered(currentQuestion)) {
-                            btn.classList.add('btn-success');
-                            btn.classList.remove('btn-outline-primary', 'btn-primary');
-                        }
-                    }
-                });
-            });
-        });
-        
         // Submit quiz button
-        document.getElementById('submit-quiz-btn').addEventListener('click', function() {
+        document.getElementById('submit-quiz-btn')?.addEventListener('click', function() {
             checkIfAnswered(currentQuestion);
             
             // Check for unanswered questions
@@ -310,12 +287,12 @@
         });
         
         // Confirm submit button
-        document.getElementById('confirm-submit').addEventListener('click', function() {
+        document.getElementById('confirm-submit')?.addEventListener('click', function() {
             document.getElementById('quiz-form').submit();
         });
         
         // Exit quiz button
-        document.getElementById('exit-quiz').addEventListener('click', function(e) {
+        document.getElementById('exit-quiz')?.addEventListener('click', function(e) {
             e.preventDefault();
             const confirmModal = new bootstrap.Modal(document.getElementById('confirmExitModal'));
             confirmModal.show();
@@ -323,6 +300,14 @@
         
         // Initialize
         showQuestion(1);
+        updateProgress();
+        
+        // Check for previously answered questions
+        for (let i = 1; i <= totalQuestions; i++) {
+            if (checkIfAnswered(i)) {
+                answeredQuestions.add(i);
+            }
+        }
         updateProgress();
     });
 </script>
