@@ -431,7 +431,7 @@ def quiz_result(request, course_slug, quiz_id, attempt_id):
     """
     course = get_object_or_404(Course, slug=course_slug)
     quiz = get_object_or_404(Quiz, id=quiz_id, module__course=course)
-    attempt = get_object_or_404(QuizAttempt, id=attempt_id, student=request.user, quiz=quiz)
+    attempt = get_object_or_404(QuizAttempt, id=attempt_id, user=request.user, quiz=quiz)
     
     context = {
         'course': course,
@@ -456,7 +456,7 @@ def generate_personalized_quiz(request, course_id=None):
         return redirect('accounts:dashboard')
     
     # Get user's quiz attempts to identify weak areas
-    quiz_attempts = QuizAttempt.objects.filter(student=user)
+    quiz_attempts = QuizAttempt.objects.filter(user=user)
     
     # If no quiz attempts, redirect to regular quizzes
     if not quiz_attempts.exists():
@@ -640,7 +640,7 @@ def quiz_results(request, course_slug, quiz_id):
     
     # Get the latest attempt
     attempt = QuizAttempt.objects.filter(
-        student=request.user,
+        user=request.user,
         quiz=quiz
     ).order_by('-completed_at').first()
     
@@ -896,7 +896,7 @@ def take_quiz(request, quiz_id):
             active_attempt.passed = score_percentage >= quiz.passing_score
             active_attempt.save()
             
-            return redirect('quiz_results', attempt_id=active_attempt.id)
+            return redirect('courses:quiz_result', course_slug=quiz.module.course.slug, quiz_id=quiz.id, attempt_id=active_attempt.id)
     
     # Get user's answers for this attempt
     user_answers = {}
@@ -1928,12 +1928,23 @@ def create_quiz(request, module_id):
                 
                 # Create answers for the question
                 correct_answer_idx = int(data.get('correct_answer', 0))
+                
+                # Print debug information about answers
+                print(f"Creating answers for question: {question.text}")
+                print(f"Answer data: {data['answers']}")
+                print(f"Correct answer index: {correct_answer_idx}")
+                
                 for idx, answer_text in enumerate(data['answers']):
-                    Answer.objects.create(
-                        question=question,
-                        text=answer_text,
-                        is_correct=(idx == correct_answer_idx)
-                    )
+                    if answer_text.strip():  # Only create answers with non-empty text
+                        Answer.objects.create(
+                            question=question,
+                            text=answer_text,
+                            is_correct=(idx == correct_answer_idx)
+                        )
+                        print(f"Created answer {idx+1}: {answer_text} (correct: {idx == correct_answer_idx})")
+                
+                # Verify answers were created
+                print(f"Answer count after creation: {question.answers.count()}")
             
             messages.success(request, 'Quiz created successfully!')
             return redirect('courses:module_content_list', module_id=module.id)
@@ -2024,12 +2035,23 @@ def edit_quiz(request, quiz_id):
                 
                 # Create answers for the question
                 correct_answer_idx = int(data.get('correct_answer', 0))
+                
+                # Print debug information about answers
+                print(f"Creating answers for question: {question.text}")
+                print(f"Answer data: {data['answers']}")
+                print(f"Correct answer index: {correct_answer_idx}")
+                
                 for idx, answer_text in enumerate(data['answers']):
-                    Answer.objects.create(
-                        question=question,
-                        text=answer_text,
-                        is_correct=(idx == correct_answer_idx)
-                    )
+                    if answer_text.strip():  # Only create answers with non-empty text
+                        Answer.objects.create(
+                            question=question,
+                            text=answer_text,
+                            is_correct=(idx == correct_answer_idx)
+                        )
+                        print(f"Created answer {idx+1}: {answer_text} (correct: {idx == correct_answer_idx})")
+                
+                # Verify answers were created
+                print(f"Answer count after creation: {question.answers.count()}")
             
             messages.success(request, 'Quiz updated successfully!')
             return redirect('courses:module_content_list', module_id=module.id)
@@ -2115,11 +2137,37 @@ def add_question_answers(request, question_id):
     # Handle form submission
     if request.method == 'POST':
         formset = AnswerFormSet(request.POST, instance=question)
+        
         if formset.is_valid():
-            formset.save()
+            answers = formset.save(commit=False)
+            
+            # Get the correct answer index
+            correct_answer_index = request.POST.get('correct_answer')
+            
+            # Set is_correct flag for each answer
+            for i, answer in enumerate(answers):
+                answer.is_correct = (str(i) == correct_answer_index)
+                answer.save()
+                
+            # Handle deleted forms
+            formset.save_m2m()
+            
+            # Debug information
+            print(f"Saved answers for question: {question.text}")
+            print(f"Total answers: {question.answers.count()}")
+            for ans in question.answers.all():
+                print(f"Answer: {ans.text}, Correct: {ans.is_correct}")
+            
+            messages.success(request, "Answers saved successfully!")
             return redirect('courses:quiz_questions_list', quiz_id=question.quiz.id)
+        else:
+            messages.error(request, "Please correct the errors below.")
     else:
         formset = AnswerFormSet(instance=question)
+        
+        # If no answers exist yet, create at least 4 empty forms
+        if question.answers.count() == 0:
+            formset.extra = 4
     
     # Prepare context
     context = {

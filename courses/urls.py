@@ -16,7 +16,7 @@ urlpatterns = [
     path('<slug:course_slug>/quiz/<int:quiz_id>/', views.quiz_detail, name='quiz_detail'),
     path('quiz/<int:quiz_id>/take/', views.take_quiz, name='take_quiz'),
     path('quiz/results/<int:attempt_id>/', views.quiz_results, name='quiz_results'),
-    path('quiz/result/<int:attempt_id>/', views.quiz_result, name='quiz_result'),
+    path('<slug:course_slug>/quiz/<int:quiz_id>/result/<int:attempt_id>/', views.quiz_result, name='quiz_result'),
     
     # Instructor-facing URLs
     path('instructor/dashboard/', views.instructor_dashboard, name='instructor_dashboard'),
