@@ -97,7 +97,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Bootstrap - For responsive design
 - FullCalendar - For the study planner calendar
 - Chart.js - For data visualization
-
-## Contact
-
-For any questions or feedback, please contact [your-email@example.com](mailto:your-email@example.com). 
