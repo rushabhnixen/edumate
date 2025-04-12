@@ -8,9 +8,10 @@ from django.http import JsonResponse
 
 from .models import (
     Badge, UserBadge, Achievement, UserAchievement,
-    Challenge, UserChallenge, PointsTransaction, Streak, Point
+    Challenge, UserChallenge, PointsTransaction, Streak, Point, ProgressBadge
 )
 from accounts.models import CustomUser
+from .utils import check_and_award_progress_badges, check_for_badge_eligibility
 
 
 @login_required
@@ -19,6 +20,10 @@ def achievements_view(request):
     Display user's achievements and badges.
     """
     user = request.user
+    
+    # Check for new badges first
+    check_and_award_progress_badges(user)
+    check_for_badge_eligibility(user)
     
     # Get user's achievements
     user_achievements = UserAchievement.objects.filter(user=user).select_related('achievement')
@@ -72,6 +77,16 @@ def badges_view(request):
     """
     user = request.user
     
+    # Check for new badges
+    new_progress_badges = check_and_award_progress_badges(user)
+    new_point_badges = check_for_badge_eligibility(user)
+    
+    # Show notification if new badges were earned
+    new_badges = new_progress_badges + new_point_badges
+    if new_badges:
+        badge_names = ", ".join([badge.badge.name for badge in new_badges])
+        messages.success(request, _(f"Congratulations! You've earned new badges: {badge_names}"))
+    
     # Get user's badges
     user_badges = UserBadge.objects.filter(user=user).select_related('badge')
     
@@ -81,10 +96,47 @@ def badges_view(request):
     # Mark badges as earned or not
     for badge in all_badges:
         badge.earned = any(ub.badge.id == badge.id for ub in user_badges)
+        
+        # Add progress information for progress badges
+        if hasattr(badge, 'progress_criteria'):
+            progress_badge = badge.progress_criteria
+            badge.progress_type = progress_badge.get_progress_type_display()
+            badge.threshold = progress_badge.threshold
+            
+            # Calculate progress percentage based on badge type
+            if progress_badge.progress_type == 'course_completion':
+                from courses.models import Enrollment
+                completions = Enrollment.objects.filter(student=user, status='completed').count()
+                badge.progress = min(100, int((completions / progress_badge.threshold) * 100))
+                
+            elif progress_badge.progress_type == 'points_milestone':
+                total_points = user.points if hasattr(user, 'points') else PointsTransaction.objects.filter(
+                    user=user, 
+                    transaction_type__in=['earned', 'bonus']
+                ).aggregate(total=Sum('points'))['total'] or 0
+                badge.progress = min(100, int((total_points / progress_badge.threshold) * 100))
+            
+            else:
+                # Default progress display
+                badge.progress = 0 if not badge.earned else 100
+        else:
+            badge.progress = 0 if not badge.earned else 100
+    
+    # Group badges by type
+    achievement_badges = [b for b in all_badges if b.badge_type == 'achievement']
+    progress_badges = [b for b in all_badges if b.badge_type == 'progress']
+    activity_badges = [b for b in all_badges if b.badge_type == 'activity']
+    special_badges = [b for b in all_badges if b.badge_type == 'special']
+    mastery_badges = [b for b in all_badges if b.badge_type == 'mastery']
     
     context = {
         'user_badges': user_badges,
         'all_badges': all_badges,
+        'achievement_badges': achievement_badges,
+        'progress_badges': progress_badges,
+        'activity_badges': activity_badges,
+        'special_badges': special_badges,
+        'mastery_badges': mastery_badges,
     }
     
     return render(request, 'gamification/badges.html', context)

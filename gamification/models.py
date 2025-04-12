@@ -25,11 +25,20 @@ class Point(models.Model):
 
 class Badge(models.Model):
     """Model for user badges"""
+    BADGE_TYPES = (
+        ('achievement', 'Achievement'),
+        ('progress', 'Progress'),
+        ('activity', 'Activity'),
+        ('special', 'Special'),
+        ('mastery', 'Mastery'),
+    )
+    
     name = models.CharField(max_length=100)
     description = models.TextField()
     icon = models.CharField(max_length=50, help_text="Font Awesome icon class")
     image = models.ImageField(upload_to='badges/', blank=True, null=True)
     points_required = models.PositiveIntegerField(default=0)
+    badge_type = models.CharField(max_length=20, choices=BADGE_TYPES, default='achievement')
     created_at = models.DateTimeField(auto_now_add=True)
     users = models.ManyToManyField(settings.AUTH_USER_MODEL, through='UserBadge', related_name='badge_set')
     
@@ -79,6 +88,39 @@ class UserAchievement(models.Model):
     
     def __str__(self):
         return f"{self.user.username} earned {self.achievement.name}"
+
+class ProgressBadge(models.Model):
+    """Model for defining progress-based badges that are automatically awarded when users reach milestones"""
+    PROGRESS_TYPES = (
+        ('course_completion', 'Course Completion'),
+        ('module_completion', 'Module Completion'),
+        ('lesson_completion', 'Lesson Completion'),
+        ('quiz_performance', 'Quiz Performance'),
+        ('activity_count', 'Activity Count'),
+        ('points_milestone', 'Points Milestone'),
+    )
+    
+    badge = models.OneToOneField(Badge, on_delete=models.CASCADE, related_name='progress_criteria')
+    progress_type = models.CharField(max_length=30, choices=PROGRESS_TYPES)
+    threshold = models.PositiveIntegerField(help_text="Target value to achieve for earning the badge")
+    course = models.ForeignKey('courses.Course', on_delete=models.SET_NULL, null=True, blank=True, 
+                              help_text="If this badge is specific to a course")
+    module = models.ForeignKey('courses.Module', on_delete=models.SET_NULL, null=True, blank=True,
+                              help_text="If this badge is specific to a module")
+    
+    # For quiz performance badges
+    min_score = models.PositiveIntegerField(null=True, blank=True, 
+                                          help_text="Minimum quiz score required (percentage)")
+    
+    # Difficulty level
+    difficulty = models.CharField(max_length=10, choices=[
+        ('easy', 'Easy'),
+        ('medium', 'Medium'),
+        ('hard', 'Hard'),
+    ], default='medium')
+    
+    def __str__(self):
+        return f"Progress criteria for {self.badge.name}"
 
 class Challenge(models.Model):
     """Model for challenges that users can complete"""

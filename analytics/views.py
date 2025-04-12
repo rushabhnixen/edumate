@@ -14,10 +14,15 @@ from django.contrib.contenttypes.models import ContentType
 
 from .models import (
     UserActivity, LearningInsight, UserPerformance,
-    ContentDifficulty, UserContentDifficultyRating
+    ContentDifficulty, UserContentDifficultyRating,
+    LearningStyle, AILearningRecommendation
 )
 from courses.models import Enrollment, Progress, QuizAttempt, Course, Lesson, Quiz
 from gamification.models import UserAchievement, UserBadge, PointsTransaction
+from .utils import (
+    generate_learning_insights, generate_learning_recommendations,
+    detect_learning_style, get_user_learning_data
+)
 
 
 @login_required
@@ -27,11 +32,32 @@ def dashboard(request):
     """
     user = request.user
     
+    # Detect learning style if not already set
+    learning_style = LearningStyle.objects.filter(user=user).first()
+    if not learning_style:
+        learning_style = detect_learning_style(user)
+    
     # Get recent activities
     recent_activities = UserActivity.objects.filter(user=user).order_by('-timestamp')[:10]
     
     # Get learning insights
     insights = LearningInsight.objects.filter(user=user).order_by('-generated_at')[:5]
+    if not insights.exists():
+        # Generate initial insights if none exist
+        insights = generate_learning_insights(user, insight_count=3)
+    
+    # Get recommendations
+    recommendations = AILearningRecommendation.objects.filter(
+        user=user,
+        is_dismissed=False,
+        is_completed=False
+    ).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+    ).order_by('-created_at')[:3]
+    
+    if not recommendations.exists():
+        # Generate initial recommendations if none exist
+        recommendations = generate_learning_recommendations(user, count=3)
     
     # Get performance metrics for the last 30 days
     thirty_days_ago = timezone.now().date() - timedelta(days=30)
@@ -58,19 +84,21 @@ def dashboard(request):
             enrollment.overall_progress = 0
     
     # Get quiz performance
-    quiz_attempts = QuizAttempt.objects.filter(student=user).order_by('-completed_at')[:10]
-    avg_quiz_score = QuizAttempt.objects.filter(student=user).aggregate(avg=Avg('score_percentage'))['avg'] or 0
+    quiz_attempts = QuizAttempt.objects.filter(user=user).order_by('-completed_at')[:10]
+    avg_quiz_score = QuizAttempt.objects.filter(user=user).aggregate(avg=Avg('score'))['avg'] or 0
     
     # Get points history
     points_history = PointsTransaction.objects.filter(user=user).order_by('-timestamp')[:10]
     
     # Get achievements and badges
-    achievements = UserAchievement.objects.filter(user=user).select_related('achievement').order_by('-unlocked_at')[:5]
-    badges = UserBadge.objects.filter(user=user).select_related('badge').order_by('-awarded_at')[:5]
+    achievements = UserAchievement.objects.filter(user=user).select_related('achievement').order_by('-date_earned')[:5]
+    badges = UserBadge.objects.filter(user=user).select_related('badge').order_by('-earned_at')[:5]
     
     context = {
         'recent_activities': recent_activities,
         'insights': insights,
+        'recommendations': recommendations,
+        'learning_style': learning_style,
         'performance': performance,
         'enrollments': enrollments,
         'quiz_attempts': quiz_attempts,
@@ -98,19 +126,27 @@ def learning_insights(request):
     unread_insights.update(is_read=True)
     
     # Group insights by type
-    strengths = insights.filter(insight_type='strength')
-    weaknesses = insights.filter(insight_type='weakness')
-    recommendations = insights.filter(insight_type='recommendation')
-    patterns = insights.filter(insight_type='pattern')
-    predictions = insights.filter(insight_type='prediction')
+    learning_pattern_insights = insights.filter(insight_type='learning_pattern')
+    engagement_insights = insights.filter(insight_type='engagement')
+    performance_insights = insights.filter(insight_type='performance')
+    recommendation_insights = insights.filter(insight_type='recommendation')
+    study_habit_insights = insights.filter(insight_type='study_habit')
+    strength_insights = insights.filter(insight_type='strength')
+    weakness_insights = insights.filter(insight_type='weakness')
+    learning_style_insights = insights.filter(insight_type='learning_style')
+    improvement_insights = insights.filter(insight_type='improvement')
     
     context = {
         'insights': insights,
-        'strengths': strengths,
-        'weaknesses': weaknesses,
-        'recommendations': recommendations,
-        'patterns': patterns,
-        'predictions': predictions,
+        'learning_pattern_insights': learning_pattern_insights,
+        'engagement_insights': engagement_insights,
+        'performance_insights': performance_insights,
+        'recommendation_insights': recommendation_insights,
+        'study_habit_insights': study_habit_insights,
+        'strength_insights': strength_insights,
+        'weakness_insights': weakness_insights,
+        'learning_style_insights': learning_style_insights,
+        'improvement_insights': improvement_insights,
     }
     
     return render(request, 'analytics/learning_insights.html', context)
@@ -126,85 +162,185 @@ def generate_insight(request):
     
     user = request.user
     
-    # Get user data for AI analysis
-    # Quiz performance
-    quiz_attempts = QuizAttempt.objects.filter(student=user)
-    avg_score = quiz_attempts.aggregate(avg=Avg('score_percentage'))['avg'] or 0
-    recent_quizzes = list(quiz_attempts.order_by('-completed_at')[:5].values('quiz__title', 'score_percentage', 'passed'))
-    
-    # Course progress
-    enrollments = Enrollment.objects.filter(student=user)
-    courses_data = []
-    for enrollment in enrollments:
-        progress_records = Progress.objects.filter(student=user, course=enrollment.course)
-        if progress_records.exists():
-            total_percentage = sum(p.completion_percentage for p in progress_records)
-            overall_progress = total_percentage / progress_records.count()
-            courses_data.append({
-                'title': enrollment.course.title,
-                'progress': overall_progress,
-                'status': enrollment.status,
-            })
-    
-    # Activity patterns
-    activities = UserActivity.objects.filter(user=user).order_by('-timestamp')[:50]
-    activity_counts = activities.values('activity_type').annotate(count=Count('id'))
-    
-    # Points and achievements
-    points = user.points
-    achievements = UserAchievement.objects.filter(user=user).count()
-    badges = UserBadge.objects.filter(user=user).count()
-    
-    # Prepare data for AI
-    user_data = {
-        'username': user.username,
-        'avg_quiz_score': avg_score,
-        'recent_quizzes': recent_quizzes,
-        'courses': courses_data,
-        'activity_patterns': list(activity_counts),
-        'points': points,
-        'achievements': achievements,
-        'badges': badges,
-    }
-    
-    # Generate insight using OpenAI
+    # Generate new insights using AI
     try:
-        from django.conf import settings
-        
-        client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an educational analytics AI that provides personalized learning insights."},
-                {"role": "user", "content": f"Based on this user data, generate a learning insight: {json.dumps(user_data)}. Provide one specific insight that would be helpful for the user's learning journey. Format your response as a JSON object with fields 'insight_type' (one of: strength, weakness, recommendation, pattern, prediction) and 'content' (the actual insight text)."}
-            ],
-            temperature=0.7,
-        )
-        
-        # Parse the response
-        insight_data = json.loads(response.choices[0].message.content)
-        
-        # Create the insight
-        insight = LearningInsight.objects.create(
-            user=user,
-            insight_type=insight_data['insight_type'],
-            content=insight_data['content'],
-            relevance_score=0.9  # Default high relevance for now
-        )
-        
-        return redirect('analytics:learning_insights')
+        insights = generate_learning_insights(user, insight_count=1)
+        if insights:
+            return redirect('analytics:learning_insights')
         
     except Exception as e:
         # Fallback if AI generation fails
         LearningInsight.objects.create(
             user=user,
+            title="Learning Recommendation",
+            description=f"Based on your recent activity, we recommend continuing to engage with your courses regularly to maintain your learning momentum.",
             insight_type='recommendation',
-            content=f"Based on your recent activity, we recommend continuing to engage with your courses regularly to maintain your learning momentum.",
             relevance_score=0.7
         )
+    
+    return redirect('analytics:learning_insights')
+
+
+@login_required
+def generate_recommendation(request):
+    """
+    Generate a new AI recommendation for the user.
+    """
+    if request.method != 'POST':
+        return redirect('analytics:dashboard')
+    
+    user = request.user
+    
+    # Generate new recommendations using AI
+    try:
+        recommendations = generate_learning_recommendations(user, count=1)
+        if recommendations:
+            return redirect('analytics:dashboard')
         
-        return redirect('analytics:learning_insights')
+    except Exception as e:
+        # Fallback if AI generation fails
+        AILearningRecommendation.objects.create(
+            user=user,
+            title="Continue Your Learning Journey",
+            description="We recommend continuing with your current courses and focusing on completing one module at a time for better retention.",
+            recommendation_type='study_technique',
+            urgency='medium',
+            confidence_score=0.6,
+            expires_at=timezone.now() + timedelta(days=30)
+        )
+    
+    return redirect('analytics:dashboard')
+
+
+@login_required
+def learning_style_view(request):
+    """
+    Display and update a user's learning style information.
+    """
+    user = request.user
+    
+    # Get or detect learning style
+    learning_style = LearningStyle.objects.filter(user=user).first()
+    if not learning_style:
+        learning_style = detect_learning_style(user)
+        
+        # If still no data, create default
+        if not learning_style:
+            learning_style = LearningStyle.objects.create(user=user)
+    
+    if request.method == 'POST':
+        # Update learning style based on form submission
+        primary_style = request.POST.get('primary_style')
+        secondary_style = request.POST.get('secondary_style')
+        pace_preference = request.POST.get('pace_preference')
+        prefers_group = request.POST.get('prefers_group_learning') == 'true'
+        prefers_examples = request.POST.get('prefers_practical_examples') == 'true'
+        prefers_theory = request.POST.get('prefers_theory_first') == 'true'
+        attention_span = int(request.POST.get('attention_span_minutes', 30))
+        
+        # Update learning style
+        learning_style.primary_style = primary_style
+        learning_style.secondary_style = secondary_style
+        learning_style.pace_preference = pace_preference
+        learning_style.prefers_group_learning = prefers_group
+        learning_style.prefers_practical_examples = prefers_examples
+        learning_style.prefers_theory_first = prefers_theory
+        learning_style.attention_span_minutes = attention_span
+        learning_style.save()
+        
+        # Generate a learning style insight
+        LearningInsight.objects.create(
+            user=user,
+            title="Updated Learning Style",
+            description=f"Your learning style has been updated. You prefer a {learning_style.get_primary_style_display()} learning style with a {learning_style.get_pace_preference_display()} pace.",
+            insight_type='learning_style',
+            relevance_score=0.9
+        )
+        
+        return redirect('analytics:learning_style')
+    
+    # Get activities data for visualization
+    visual_count = UserActivity.objects.filter(
+        user=user,
+        activity_type__in=['video_view', 'image_view']
+    ).count()
+    
+    auditory_count = UserActivity.objects.filter(
+        user=user,
+        activity_type__in=['audio_view', 'video_view']
+    ).count()
+    
+    reading_count = UserActivity.objects.filter(
+        user=user,
+        activity_type__in=['lesson_view', 'document_view', 'article_view']
+    ).count()
+    
+    kinesthetic_count = UserActivity.objects.filter(
+        user=user,
+        activity_type__in=['quiz_attempt', 'interactive_activity']
+    ).count()
+    
+    activity_counts = {
+        'Visual': visual_count,
+        'Auditory': auditory_count,
+        'Reading/Writing': reading_count,
+        'Kinesthetic': kinesthetic_count
+    }
+    
+    context = {
+        'learning_style': learning_style,
+        'activity_counts': activity_counts,
+    }
+    
+    return render(request, 'analytics/learning_style.html', context)
+
+
+@login_required
+def dismiss_recommendation(request, recommendation_id):
+    """
+    Mark a recommendation as dismissed.
+    """
+    if request.method != 'POST':
+        return redirect('analytics:dashboard')
+        
+    recommendation = get_object_or_404(
+        AILearningRecommendation, 
+        id=recommendation_id,
+        user=request.user
+    )
+    
+    recommendation.is_dismissed = True
+    recommendation.save()
+    
+    return redirect('analytics:dashboard')
+
+
+@login_required
+def complete_recommendation(request, recommendation_id):
+    """
+    Mark a recommendation as completed.
+    """
+    if request.method != 'POST':
+        return redirect('analytics:dashboard')
+        
+    recommendation = get_object_or_404(
+        AILearningRecommendation, 
+        id=recommendation_id,
+        user=request.user
+    )
+    
+    recommendation.is_completed = True
+    recommendation.save()
+    
+    # Award points for completing a recommendation
+    PointsTransaction.objects.create(
+        user=request.user,
+        points=10,
+        transaction_type='earned',
+        description=f"Completed recommendation: {recommendation.title}"
+    )
+    
+    return redirect('analytics:dashboard')
 
 
 @login_required
@@ -296,7 +432,7 @@ class InstructorDashboardView(LoginRequiredMixin, UserPassesTestMixin, TemplateV
             
             # Calculate quiz performance
             course_quizzes = QuizAttempt.objects.filter(quiz__module__course=course)
-            avg_quiz_score = course_quizzes.aggregate(avg=Avg('score_percentage'))['avg'] or 0
+            avg_quiz_score = course_quizzes.aggregate(avg=Avg('score'))['avg'] or 0
             pass_rate = course_quizzes.filter(passed=True).count() / course_quizzes.count() if course_quizzes.count() > 0 else 0
             
             enrollment_stats.append({
@@ -356,7 +492,7 @@ class CourseAnalyticsView(LoginRequiredMixin, UserPassesTestMixin, DetailView):
         for module in course.modules.all():
             for quiz in module.contents.filter(quiz__isnull=False):
                 quiz_attempts = QuizAttempt.objects.filter(quiz=quiz.quiz)
-                avg_score = quiz_attempts.aggregate(avg=Avg('score_percentage'))['avg'] or 0
+                avg_score = quiz_attempts.aggregate(avg=Avg('score'))['avg'] or 0
                 pass_rate = quiz_attempts.filter(passed=True).count() / quiz_attempts.count() if quiz_attempts.count() > 0 else 0
                 
                 quiz_data.append({
@@ -448,43 +584,48 @@ def log_activity(request):
 @login_required
 def student_analytics_dashboard(request):
     """
-    Display analytics dashboard for students with personalized insights.
+    Display analytics dashboard for students.
     """
     user = request.user
     
-    # Get user's quiz performance
-    quiz_attempts = QuizAttempt.objects.filter(student=user)
-    avg_score = quiz_attempts.aggregate(Avg('score'))['score__avg'] or 0
+    # Get recent activities
+    recent_activities = UserActivity.objects.filter(user=user).order_by('-timestamp')[:10]
     
-    # Get user's learning insights
-    insights = LearningInsight.objects.filter(user=user).order_by('-generated_at')[:5]
+    # Get learning progress
+    enrollments = Enrollment.objects.filter(student=user).select_related('course')
     
-    # Get user's activity data
-    activities = UserActivity.objects.filter(user=user).order_by('-timestamp')[:10]
+    # Get quiz performance
+    quiz_attempts = QuizAttempt.objects.filter(user=user)
+    avg_score = quiz_attempts.aggregate(avg=Avg('score'))['avg'] or 0
+    recent_quizzes = quiz_attempts.order_by('-completed_at')[:5]
     
-    # Get user's performance data
-    performance = UserPerformance.objects.filter(user=user).order_by('-date')[:10]
+    # Get user performance metrics
+    thirty_days_ago = timezone.now().date() - timedelta(days=30)
+    performance = UserPerformance.objects.filter(
+        user=user,
+        date__gte=thirty_days_ago
+    ).order_by('date')
     
-    # Get recommended courses based on user's performance and interests
-    recommended_courses = get_personalized_course_recommendations(user)
+    # Get user badges and achievements
+    badges = UserBadge.objects.filter(user=user).select_related('badge')
+    achievements = UserAchievement.objects.filter(user=user).select_related('achievement')
     
-    # Get weak areas that need improvement
-    weak_areas = identify_weak_areas(user)
+    # Get personalized recommendations
+    recommendations = get_personalized_course_recommendations(user)
     
-    # Get learning streak data
-    streak_data = {
-        'current_streak': user.streak.current_streak if hasattr(user, 'streak') else 0,
-        'longest_streak': user.streak.longest_streak if hasattr(user, 'streak') else 0,
-    }
+    # Get learning insights
+    insights = LearningInsight.objects.filter(user=user, is_read=False).order_by('-generated_at')[:3]
     
     context = {
+        'recent_activities': recent_activities,
+        'enrollments': enrollments,
         'avg_score': avg_score,
-        'insights': insights,
-        'activities': activities,
+        'recent_quizzes': recent_quizzes,
         'performance': performance,
-        'recommended_courses': recommended_courses,
-        'weak_areas': weak_areas,
-        'streak_data': streak_data,
+        'badges': badges,
+        'achievements': achievements,
+        'recommendations': recommendations,
+        'insights': insights,
     }
     
     return render(request, 'analytics/student_dashboard.html', context)
@@ -549,7 +690,7 @@ def get_personalized_course_recommendations(user, limit=5):
     enrolled_courses = Course.objects.filter(enrollments__student=user)
     
     # Get user's quiz performance to identify strengths and weaknesses
-    quiz_attempts = QuizAttempt.objects.filter(student=user)
+    quiz_attempts = QuizAttempt.objects.filter(user=user)
     
     # If user has no quiz attempts, recommend popular courses
     if not quiz_attempts.exists():
@@ -604,7 +745,7 @@ def identify_weak_areas(user):
     Identify areas where the user needs improvement based on quiz performance.
     """
     # Get user's quiz attempts
-    quiz_attempts = QuizAttempt.objects.filter(student=user)
+    quiz_attempts = QuizAttempt.objects.filter(user=user)
     
     if not quiz_attempts.exists():
         return []

@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
     UserActivity, LearningInsight, UserPerformance,
-    ContentDifficulty, UserContentDifficultyRating
+    ContentDifficulty, UserContentDifficultyRating,
+    LearningStyle, AILearningRecommendation
 )
 
 
@@ -15,10 +16,27 @@ class UserActivityAdmin(admin.ModelAdmin):
 
 @admin.register(LearningInsight)
 class LearningInsightAdmin(admin.ModelAdmin):
-    list_display = ['user', 'insight_type', 'generated_at', 'is_read']
+    list_display = ['user', 'title', 'insight_type', 'relevance_score', 'generated_at', 'is_read']
     list_filter = ['insight_type', 'is_read', 'generated_at']
     search_fields = ['user__username', 'description', 'title']
     date_hierarchy = 'generated_at'
+
+
+@admin.register(LearningStyle)
+class LearningStyleAdmin(admin.ModelAdmin):
+    list_display = ['user', 'primary_style', 'secondary_style', 'pace_preference', 'confidence_level', 'last_updated']
+    list_filter = ['primary_style', 'pace_preference', 'confidence_level']
+    search_fields = ['user__username']
+    readonly_fields = ['last_updated']
+
+
+@admin.register(AILearningRecommendation)
+class AILearningRecommendationAdmin(admin.ModelAdmin):
+    list_display = ['user', 'title', 'recommendation_type', 'urgency', 'created_at', 'is_dismissed', 'is_completed']
+    list_filter = ['recommendation_type', 'urgency', 'created_at', 'is_dismissed', 'is_completed']
+    search_fields = ['user__username', 'title', 'description']
+    date_hierarchy = 'created_at'
+    readonly_fields = ['created_at']
 
 
 @admin.register(UserPerformance)

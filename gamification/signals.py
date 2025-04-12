@@ -5,10 +5,12 @@ from django.contrib.auth import get_user_model
 from django.db.models import Sum, Count
 
 from courses.models import Enrollment, Progress, QuizAttempt
+from analytics.models import UserActivity
 from .models import (
     Badge, UserBadge, Achievement, UserAchievement,
     PointsTransaction, Streak, Leaderboard, UserChallenge
 )
+from .utils import check_and_award_progress_badges, check_for_badge_eligibility
 
 User = get_user_model()
 
@@ -58,7 +60,7 @@ def update_user_points(sender, instance, created, **kwargs):
         leaderboard.save()
         
         # Check for badge eligibility
-        check_badge_eligibility(user)
+        check_for_badge_eligibility(user)
 
 
 def check_badge_eligibility(user):
@@ -90,7 +92,7 @@ def check_quiz_achievements(sender, instance, created, **kwargs):
     Check for quiz-related achievements when a quiz is completed.
     """
     if created and instance.passed:
-        user = instance.student
+        user = instance.user
         
         # Update streak
         streak, created = Streak.objects.get_or_create(user=user)
@@ -312,4 +314,45 @@ def update_leaderboard_ranks(sender, instance, **kwargs):
     for i, leaderboard in enumerate(leaderboards, 1):
         if leaderboard.rank != i:
             leaderboard.rank = i
-            leaderboard.save(update_fields=['rank']) 
+            leaderboard.save(update_fields=['rank'])
+
+
+@receiver(post_save, sender=Progress)
+def check_badges_on_progress(sender, instance, created, **kwargs):
+    """Check for badge eligibility when a user makes progress in a course"""
+    if instance.student:
+        check_and_award_progress_badges(instance.student)
+
+
+@receiver(post_save, sender=QuizAttempt)
+def check_badges_on_quiz_attempt(sender, instance, created, **kwargs):
+    """Check for badge eligibility when a user completes a quiz"""
+    if created and instance.user:
+        check_and_award_progress_badges(instance.user)
+
+
+@receiver(post_save, sender=Enrollment)
+def check_badges_on_enrollment(sender, instance, created, **kwargs):
+    """Check for badge eligibility when a user's enrollment status changes"""
+    if instance.student and instance.status == 'completed':
+        check_and_award_progress_badges(instance.student)
+
+
+@receiver(post_save, sender=PointsTransaction)
+def check_badges_on_points(sender, instance, created, **kwargs):
+    """Check for badge eligibility when a user earns points"""
+    if created and instance.user and instance.transaction_type in ['earned', 'bonus']:
+        check_for_badge_eligibility(instance.user)
+
+
+@receiver(post_save, sender=UserActivity)
+def check_badges_on_activity(sender, instance, created, **kwargs):
+    """Check for badge eligibility when a user is active"""
+    if created and instance.user:
+        # Only check for activity-based badges once per day per user
+        last_check = getattr(instance.user, '_last_activity_badge_check', None)
+        today = timezone.now().date()
+        
+        if not last_check or last_check != today:
+            check_and_award_progress_badges(instance.user)
+            instance.user._last_activity_badge_check = today 

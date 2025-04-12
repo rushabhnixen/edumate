@@ -195,7 +195,7 @@ def course_content(request, slug):
     enrollment = get_object_or_404(Enrollment, student=request.user, course=course)
     
     # Get all modules with their content
-    modules = course.modules.all().prefetch_related('contents')
+    modules = course.modules.all().prefetch_related('lessons', 'videos', 'quizzes')
     
     # Get progress for each module
     progress_records = Progress.objects.filter(
@@ -206,11 +206,78 @@ def course_content(request, slug):
     # Create a dictionary of module_id -> progress
     progress_dict = {p.module_id: p for p in progress_records}
     
+    # Calculate overall progress and mark modules as completed
+    total_contents = 0
+    completed_contents = 0
+    next_content = None
+    next_quiz = None
+    all_quizzes_completed = True
+    
+    for module in modules:
+        # Count total content items
+        module_total = module.lessons.count() + module.videos.count() + module.quizzes.count()
+        total_contents += module_total
+        
+        # Get progress for this module
+        module_progress = progress_dict.get(module.id)
+        module_completed = 0
+        
+        if module_progress:
+            # Count completed items in this module
+            module_completed = (
+                module_progress.completed_lessons.count() + 
+                module_progress.completed_videos.count() + 
+                module_progress.completed_quizzes.count()
+            )
+            completed_contents += module_completed
+            
+            # Check if module is completed
+            module.is_completed = (module_completed == module_total and module_total > 0)
+        else:
+            module.is_completed = False
+            
+        # Find next content if not found yet
+        if not next_content and module_completed < module_total:
+            # Check lessons
+            for lesson in module.lessons.all():
+                if not module_progress or lesson not in module_progress.completed_lessons.all():
+                    next_content = lesson
+                    break
+                    
+            # Check videos if still no next content
+            if not next_content:
+                for video in module.videos.all():
+                    if not module_progress or video not in module_progress.completed_videos.all():
+                        next_content = video
+                        break
+            
+            # Check quizzes for next quiz and all_quizzes_completed
+            for quiz in module.quizzes.all():
+                if not module_progress or quiz not in module_progress.completed_quizzes.all():
+                    if not next_quiz:
+                        next_quiz = quiz
+                    all_quizzes_completed = False
+    
+    # Check if next_content exists and has an id
+    if next_content and not hasattr(next_content, 'id'):
+        next_content = None
+        
+    # Check if next_quiz exists and has an id
+    if next_quiz and not hasattr(next_quiz, 'id'):
+        next_quiz = None
+    
+    # Calculate overall progress percentage
+    overall_progress = (completed_contents / total_contents * 100) if total_contents > 0 else 0
+    
     context = {
         'course': course,
         'modules': modules,
         'enrollment': enrollment,
-        'progress_dict': progress_dict
+        'progress_dict': progress_dict,
+        'overall_progress': overall_progress,
+        'next_content': next_content,
+        'next_quiz': next_quiz,
+        'all_quizzes_completed': all_quizzes_completed
     }
     
     return render(request, 'courses/course_content.html', context)
@@ -469,32 +536,32 @@ def generate_personalized_quiz(request, course_id=None):
     weak_topics = []
     for attempt in quiz_attempts:
         if attempt.score < 70:  # Consider topics with score below 70% as weak
-            weak_topics.append(attempt.quiz.lesson.id)
+            weak_topics.append(attempt.quiz.module.id)
     
     # If no weak topics found, use topics with lowest scores
     if not weak_topics:
         lowest_score_attempts = quiz_attempts.order_by('score')[:3]
-        weak_topics = [attempt.quiz.lesson.id for attempt in lowest_score_attempts]
+        weak_topics = [attempt.quiz.module.id for attempt in lowest_score_attempts]
     
     # Get questions from weak topics
     questions = []
     if course_id:
         # If course_id is provided, get questions only from that course
         questions = Question.objects.filter(
-            quiz__lesson__module__course_id=course_id,
-            quiz__lesson__id__in=weak_topics
+            quiz__module__course_id=course_id,
+            quiz__module__id__in=weak_topics
         ).order_by('?')[:10]  # Randomly select 10 questions
     else:
         # Otherwise, get questions from all weak topics
         questions = Question.objects.filter(
-            quiz__lesson__id__in=weak_topics
+            quiz__module__id__in=weak_topics
         ).order_by('?')[:10]  # Randomly select 10 questions
     
     # If not enough questions found, get random questions
     if questions.count() < 5:
         if course_id:
             additional_questions = Question.objects.filter(
-                quiz__lesson__module__course_id=course_id
+                quiz__module__course_id=course_id
             ).exclude(id__in=[q.id for q in questions]).order_by('?')[:10-questions.count()]
             questions = list(questions) + list(additional_questions)
         else:
@@ -503,24 +570,49 @@ def generate_personalized_quiz(request, course_id=None):
             ).order_by('?')[:10-questions.count()]
             questions = list(questions) + list(additional_questions)
     
-    # Create a temporary quiz in session
-    request.session['personalized_quiz'] = {
-        'title': 'Personalized Challenge',
-        'description': 'This quiz is tailored to help you improve in areas where you need practice.',
-        'questions': [
-            {
-                'id': q.id,
-                'text': q.text,
-                'options': [
-                    {'id': o.id, 'text': o.text} 
-                    for o in q.option_set.all()
-                ]
-            } 
-            for q in questions
-        ]
-    }
+    # Create a personalized quiz in the database
+    from django.utils.text import slugify
     
-    return redirect('courses:take_personalized_quiz')
+    # Create a title for the personalized quiz
+    title = f"Personalized Quiz for {user.username}"
+    course = None
+    if course_id:
+        course = Course.objects.get(id=course_id)
+        title = f"Personalized Quiz: {course.title}"
+    
+    # Get a default module to assign the quiz to
+    default_module = None
+    if course:
+        default_module = course.modules.first()
+    else:
+        # If no specific course, get the first module from any course
+        default_module = Module.objects.first()
+    
+    if not default_module:
+        messages.error(request, "Unable to create a quiz: no modules available.")
+        return redirect('courses:course_list')
+    
+    # Create a new quiz object
+    personalized_quiz = Quiz.objects.create(
+        title=title,
+        description="This quiz is tailored to help you improve in areas where you need practice.",
+        time_limit=15,  # 15 minutes
+        passing_score=70,
+        module=default_module
+    )
+    
+    # Add the questions to the quiz
+    for q in questions:
+        personalized_quiz.questions.add(q)
+    
+    # Record user activity
+    UserActivity.objects.create(
+        user=user,
+        activity_type='personalized_quiz_generation',
+        content_object=personalized_quiz
+    )
+    
+    return redirect('courses:take_personalized_quiz', quiz_id=personalized_quiz.id)
 
 
 @login_required
@@ -597,13 +689,27 @@ def take_personalized_quiz(request, quiz_id):
         return redirect('courses:personalized_quiz_results', quiz_id=quiz_id)
     
     # Display quiz
+    # Get all questions for this quiz with their answers
+    questions = quiz.questions.all().prefetch_related('answers').order_by('?')[:10]  # Randomize and limit to 10 questions
+    
+    # For now, use the regular take_quiz template
+    # Calculate total points from questions
+    total_points = sum(question.points for question in questions)
+    
+    # Create a course attribute for the quiz if needed by the template
+    course = quiz.module.course
+    
+    # Prepare context
     context = {
         'quiz': quiz,
-        'questions': quiz.questions.all().order_by('?')[:10],  # Randomize and limit to 10 questions
-        'time_limit_seconds': 15 * 60,  # 15 minutes for personalized quiz
+        'questions': questions,
+        'time_limit_seconds': quiz.time_limit * 60,
+        'course': course,
+        'is_personalized': True
     }
     
-    return render(request, 'courses/take_personalized_quiz.html', context)
+    # Use the existing quiz_detail.html template temporarily
+    return render(request, 'courses/quiz_detail.html', context)
 
 
 @login_required
@@ -617,20 +723,34 @@ def personalized_quiz_results(request, quiz_id):
     ).order_by('-created_at').first()
     
     if not attempt:
-        messages.warning(request, "You haven't taken this personalized quiz yet")
-        return redirect('courses:take_personalized_quiz', quiz_id=quiz_id)
+        messages.error(request, "No attempt found for this quiz.")
+        return redirect('courses:course_list')
     
     # Calculate percentage score
     percentage_score = (attempt.correct_answers / attempt.total_questions * 100) if attempt.total_questions > 0 else 0
     
+    # Generate some feedback based on score
+    if percentage_score >= 80:
+        feedback = "Excellent work! You've demonstrated a strong understanding of these concepts."
+    elif percentage_score >= 60:
+        feedback = "Good job! You're making progress, but there's still room for improvement."
+    else:
+        feedback = "You need more practice with these concepts. Focus on reviewing the material."
+    
+    # Get course from quiz's module
+    course = quiz.module.course
+    
     context = {
         'quiz': quiz,
         'attempt': attempt,
-        'percentage_score': percentage_score,
+        'score_percentage': percentage_score,
         'passed': percentage_score >= 70,  # Assuming 70% is passing
+        'feedback': feedback,
+        'course': course
     }
     
-    return render(request, 'courses/personalized_quiz_results.html', context)
+    # Use the existing quiz_result.html template
+    return render(request, 'courses/quiz_result.html', context)
 
 
 @login_required

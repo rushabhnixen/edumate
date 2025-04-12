@@ -20,7 +20,7 @@ class CustomUser(AbstractUser):
     date_of_birth = models.DateField(_('Date of Birth'), blank=True, null=True)
     
     # User preferences
-    learning_style = models.CharField(_('Learning Style'), max_length=50, blank=True)
+    learning_preference = models.CharField(_('Learning Preference'), max_length=50, blank=True)
     interests = models.TextField(_('Interests'), blank=True)
     
     # Gamification fields

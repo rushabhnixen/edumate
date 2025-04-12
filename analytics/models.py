@@ -56,6 +56,65 @@ class UserActivity(models.Model):
         return f"{self.user.username} - {self.get_activity_type_display()} - {self.timestamp.strftime('%Y-%m-%d %H:%M')}"
 
 
+class LearningStyle(models.Model):
+    """
+    Model to store a user's identified learning style and preferences.
+    """
+    LEARNING_STYLES = (
+        ('visual', _('Visual')),
+        ('auditory', _('Auditory')),
+        ('reading', _('Reading/Writing')),
+        ('kinesthetic', _('Kinesthetic')),
+        ('multimodal', _('Multimodal')),
+    )
+    
+    PACE_PREFERENCES = (
+        ('slow', _('Slow & Thorough')),
+        ('moderate', _('Moderate')),
+        ('fast', _('Fast-Paced')),
+        ('variable', _('Variable')),
+    )
+    
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='learning_style_profile'
+    )
+    primary_style = models.CharField(
+        max_length=20,
+        choices=LEARNING_STYLES,
+        default='multimodal'
+    )
+    secondary_style = models.CharField(
+        max_length=20,
+        choices=LEARNING_STYLES,
+        null=True,
+        blank=True
+    )
+    pace_preference = models.CharField(
+        max_length=20,
+        choices=PACE_PREFERENCES,
+        default='moderate'
+    )
+    prefers_group_learning = models.BooleanField(default=True)
+    prefers_practical_examples = models.BooleanField(default=True)
+    prefers_theory_first = models.BooleanField(default=False)
+    attention_span_minutes = models.PositiveIntegerField(default=30)
+    confidence_level = models.IntegerField(
+        default=3,
+        choices=[(1, _('Very Low')), (2, _('Low')), (3, _('Moderate')), 
+                 (4, _('High')), (5, _('Very High'))]
+    )
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = _('Learning Style')
+        verbose_name_plural = _('Learning Styles')
+    
+    def __str__(self):
+        return f"{self.user.username}'s Learning Style: {self.get_primary_style_display()}"
+
+
 class LearningInsight(models.Model):
     """
     AI-generated insights about user learning patterns.
@@ -66,6 +125,10 @@ class LearningInsight(models.Model):
         ('performance', 'Performance'),
         ('recommendation', 'Recommendation'),
         ('study_habit', 'Study Habit'),
+        ('strength', 'Strength'),
+        ('weakness', 'Weakness'),
+        ('learning_style', 'Learning Style'),
+        ('improvement', 'Improvement Area'),
     )
     
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='learning_insights')
@@ -74,6 +137,7 @@ class LearningInsight(models.Model):
     insight_type = models.CharField(max_length=50, choices=INSIGHT_TYPES)
     generated_at = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
+    relevance_score = models.FloatField(default=0.5, help_text=_("How relevant this insight is to the user (0-1)"))
     
     class Meta:
         verbose_name = _('Learning Insight')
@@ -82,6 +146,71 @@ class LearningInsight(models.Model):
     
     def __str__(self):
         return f"{self.title} - {self.user.username}"
+
+
+class AILearningRecommendation(models.Model):
+    """
+    AI-generated personalized learning recommendations for users.
+    """
+    RECOMMENDATION_TYPES = (
+        ('course', _('Course Recommendation')),
+        ('resource', _('Learning Resource')),
+        ('study_technique', _('Study Technique')),
+        ('content_format', _('Content Format')),
+        ('practice', _('Practice Exercise')),
+        ('challenge', _('Challenge')),
+        ('learning_path', _('Learning Path')),
+    )
+    
+    URGENCY_LEVELS = (
+        ('low', _('Low')),
+        ('medium', _('Medium')),
+        ('high', _('High')),
+    )
+    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='learning_recommendations'
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    recommendation_type = models.CharField(max_length=30, choices=RECOMMENDATION_TYPES)
+    urgency = models.CharField(max_length=10, choices=URGENCY_LEVELS, default='medium')
+    
+    # For linking to specific content
+    content_type = models.ForeignKey(
+        ContentType, 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True
+    )
+    object_id = models.PositiveIntegerField(null=True, blank=True)
+    content_object = GenericForeignKey('content_type', 'object_id')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_dismissed = models.BooleanField(default=False)
+    is_completed = models.BooleanField(default=False)
+    confidence_score = models.FloatField(
+        default=0.7,
+        help_text=_("AI confidence in this recommendation (0-1)")
+    )
+    
+    class Meta:
+        verbose_name = _('AI Learning Recommendation')
+        verbose_name_plural = _('AI Learning Recommendations')
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.title} for {self.user.username}"
+    
+    @property
+    def is_expired(self):
+        if self.expires_at:
+            from django.utils import timezone
+            return timezone.now() > self.expires_at
+        return False
 
 
 class UserEngagement(models.Model):

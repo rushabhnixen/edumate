@@ -59,6 +59,11 @@ urlpatterns = [
     # Add the personalized recommendations URL pattern
     path('personalized-recommendations/', views.personalized_recommendations, name='personalized_recommendations'),
 
+    # Add personalized quiz URLs
+    path('personalized-quiz/generate/<int:course_id>/', views.generate_personalized_quiz, name='generate_personalized_quiz'),
+    path('personalized-quiz/take/<int:quiz_id>/', views.take_personalized_quiz, name='take_personalized_quiz'),
+    path('personalized-quiz/results/<int:quiz_id>/', views.personalized_quiz_results, name='personalized_quiz_results'),
+
     # Add the learning path URL pattern
     path('learning-path/', views.learning_path, name='learning_path'),
 

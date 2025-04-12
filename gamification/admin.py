@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     Point, Badge, Achievement, UserBadge, UserAchievement,
-    Challenge, UserChallenge, Streak, PointsTransaction
+    Challenge, UserChallenge, Streak, PointsTransaction, ProgressBadge
 )
 
 @admin.register(Point)
@@ -13,8 +13,16 @@ class PointAdmin(admin.ModelAdmin):
 
 @admin.register(Badge)
 class BadgeAdmin(admin.ModelAdmin):
-    list_display = ('name', 'description', 'image', 'points_required')
+    list_display = ('name', 'description', 'badge_type', 'image', 'points_required')
+    list_filter = ('badge_type', 'created_at')
     search_fields = ('name', 'description')
+
+@admin.register(ProgressBadge)
+class ProgressBadgeAdmin(admin.ModelAdmin):
+    list_display = ('badge', 'progress_type', 'threshold', 'difficulty')
+    list_filter = ('progress_type', 'difficulty')
+    search_fields = ('badge__name',)
+    autocomplete_fields = ['badge', 'course', 'module']
 
 @admin.register(Achievement)
 class AchievementAdmin(admin.ModelAdmin):
