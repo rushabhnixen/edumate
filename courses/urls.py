@@ -12,6 +12,7 @@ urlpatterns = [
     path('content/<slug:slug>/', views.course_content, name='course_content'),
     path('content/view/<int:content_id>/', views.view_content, name='view_content'),
     path('<slug:course_slug>/lesson/<int:lesson_id>/', views.lesson_detail, name='lesson_detail'),
+    path('<slug:course_slug>/video/<int:video_id>/', views.video_detail, name='video_detail'),
     path('<slug:course_slug>/quiz/<int:quiz_id>/', views.quiz_detail, name='quiz_detail'),
     path('quiz/<int:quiz_id>/take/', views.take_quiz, name='take_quiz'),
     path('quiz/results/<int:attempt_id>/', views.quiz_results, name='quiz_results'),

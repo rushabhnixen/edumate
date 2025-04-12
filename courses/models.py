@@ -178,6 +178,7 @@ class Video(Content):
     Video lesson content.
     """
     url = models.URLField(_('Video URL'))
+    description = models.TextField(_('Description'), blank=True)
     duration = models.PositiveIntegerField(_('Duration (seconds)'), default=0)
     module = models.ForeignKey(Module, on_delete=models.CASCADE, related_name='videos')
     
